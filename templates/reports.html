@@ -1,0 +1,24 @@
+<!-- templates/reports.html -->
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <title>Отчёты</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<div class="report">
+    <h1>Отчёты за сегодня</h1>
+    <div class="report-card">
+        <div class="report-label">Выручка за день</div>
+        <div class="report-value">{{ day_total }} сом</div>
+    </div>
+    <h2>Топ‑5 товаров</h2>
+    <ul>
+        {% for t in top_products %}
+            <li>{{ t.product__name }} — {{ t.sum_qty }}</li>
+        {% endfor %}
+    </ul>
+</div>
+</body>
+</html>

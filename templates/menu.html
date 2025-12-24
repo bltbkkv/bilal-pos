@@ -1,0 +1,249 @@
+{% load static %}
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <title>Касса — Меню</title>
+    <link rel="stylesheet" href="{% static 'style.css' %}">
+    <script defer src="{% static 'js/cart.js' %}"></script>
+
+</head>
+
+<body>
+
+{% if not employee %}
+<div id="pinModal" class="modal" aria-hidden="false">
+  <div class="modal-content">
+    <h2>Введите PIN кассира</h2>
+    <input type="password" id="pinInput" placeholder="PIN" autocomplete="off" />
+    <button id="pinSubmit">Войти</button>
+    <p id="pinError" style="color:red; display:none; margin-top:8px;">Неверный PIN</p>
+  </div>
+</div>
+{% endif %}
+
+<style>
+.modal {
+  position: fixed; inset: 0;
+  background: rgba(0,0,0,0.6);
+  display: flex; justify-content: center; align-items: center;
+  z-index: 9999;
+}
+.modal[aria-hidden="true"] { display: none; }
+.modal-content {
+  background: #fff; padding: 20px; border-radius: 8px; text-align: center; width: 320px;
+}
+</style>
+
+<div class="layout">
+   <header class="topbar">
+    <div class="brand">Mediar fried chiken</div>
+    <div class="employee" id="employeeName">
+        Кассир: {{ employee.name|default:"Не выбрано" }}
+        {% if employee and employee.role == "админ" %}
+<a href="{% url 'report_by_date' %}" style="margin-left: 20px; font-weight: bold; color: white;">Отчёт</a>
+{% endif %}
+
+        <a href="{% url 'orders_list' %}" style="margin-left: 20px; font-weight: bold; color: white;">Заказы</a>
+        <a href="{% url 'logout' %}" style="margin-left: 20px; font-weight: bold; color: #ff4d4d;">Выход</a>
+
+        {% if employee and employee.role == "админ" %}
+        <a href="/admin/" style="margin-left: 20px; font-weight: bold; color: #ffc107;">Админка</a>
+        {% endif %}
+    </div>
+</header>
+
+
+
+    <main class="content">
+        <section class="left">
+            <div class="categories">
+                {% for cat in categories %}
+                    <button class="cat-btn" data-cat="{{ cat }}">{{ cat|title }}</button>
+                {% empty %}
+                    <p>Категории не найдены</p>
+                {% endfor %}
+            </div>
+
+            <div class="grid" id="product-grid">
+                {% for p in products %}
+                <div class="item"
+                     data-category="{{ p.category }}"
+                     data-id="{{ p.id }}"
+                     data-name="{{ p.name }}"
+                     data-price="{{ p.price }}">
+                    <img src="{% if p.image %}{{ p.image.url }}{% else %}{% static 'images/placeholder.jpg' %}{% endif %}"
+                         alt="{{ p.name }}">
+                    <div class="item-name">{{ p.name }}</div>
+                    <div class="item-price">{{ p.price }} сом</div>
+                </div>
+                {% endfor %}
+            </div>
+        </section>
+
+<aside class="cart-panel">
+    <h2>Корзина</h2>
+    <ul id="cart-items"></ul>
+
+    <div class="cart-total">Итого: <span id="cart-total">0</span> сом</div>
+
+
+
+    <!-- 🔹 Калькулятор сдачи -->
+    <div class="cash-box">
+        <label for="cashGiven">Получено от клиента:</label>
+        <input type="number" id="cashGiven" placeholder="Введите сумму" />
+        <div class="change">Сдача: <span id="changeAmount">0</span> сом</div>
+    </div>
+
+<textarea id="order-note" placeholder="Комментарий к заказу" rows="2"></textarea>
+
+    <div class="cart-actions">
+        <button id="submitOrderBtn">Оформить заказ</button>
+        <button id="btn-clear">Очистить</button>
+    </div>
+
+</aside>
+
+
+    </main>
+</div>
+
+<script>
+  window.EMPLOYEE_ID = {% if employee and employee.id %}{{ employee.id }}{% else %}null{% endif %};
+</script>
+
+<script>
+(function() {
+  document.addEventListener('DOMContentLoaded', function() {
+    var pinModal = document.getElementById('pinModal');
+    var pinInput = document.getElementById('pinInput');
+    var pinSubmit = document.getElementById('pinSubmit');
+    var pinError = document.getElementById('pinError');
+
+    if (!pinModal) return;
+
+    if (pinInput) pinInput.focus();
+
+    function showError(msg) {
+      if (pinError) {
+        pinError.textContent = msg || 'Неверный PIN';
+        pinError.style.display = 'block';
+      }
+    }
+    function hideError() {
+      if (pinError) pinError.style.display = 'none';
+    }
+
+    async function submitPin() {
+      try {
+        hideError();
+        var pin = (pinInput && pinInput.value || '').trim();
+        if (!pin) {
+          showError('Введите PIN');
+          return;
+        }
+        var resp = await fetch('/employee/get-id/?pin=' + encodeURIComponent(pin));
+        if (!resp.ok) {
+          showError('Ошибка подключения (' + resp.status + ')');
+          return;
+        }
+        var data = await resp.json();
+        if (data && data.id) {
+          // ✅ вместо скрытия модалки делаем редирект
+          window.location.href = '/menu/?emp=' + data.id;
+        } else {
+          showError('Неверный PIN');
+        }
+      } catch (e) {
+        console.error('Ошибка при проверке PIN:', e);
+        showError('Неожиданная ошибка');
+      }
+    }
+
+    if (pinSubmit) pinSubmit.addEventListener('click', submitPin);
+    if (pinInput) {
+      pinInput.addEventListener('keydown', function(e) {
+        if (e.key === 'Enter') submitPin();
+      });
+    }
+  });
+})();
+<!-- Кнопка оформления заказа -->
+
+
+document.getElementById("submitOrderBtn").addEventListener("click", function() {
+    // пример: получаем ID заказа из скрытого поля или переменной
+    let orderId = 91;  // заменишь на динамический ID
+
+    // вызываем Django view для печати
+    fetch(`/orders/${orderId}/receipt/`, {
+        method: 'GET'
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.ok) {
+            // ✅ чек уже ушёл на принтер
+            console.log("Чек напечатан для заказа №" + data.order_id);
+
+            // можно показать уведомление кассиру
+            alert("Чек напечатан!");
+        }
+    })
+    .catch(err => {
+        console.error("Ошибка печати:", err);
+        alert("Ошибка при печати чека");
+    });
+});
+</script>
+</body>
+<script>
+(function() {
+  function updateChange() {
+    const cashInput = document.getElementById('cashGiven');
+    const changeSpan = document.getElementById('changeAmount');
+    const totalSpan = document.getElementById('cart-total');
+
+    if (!cashInput || !changeSpan || !totalSpan) return;
+
+    // берём только число из total, убираем всё лишнее кроме цифр, точки и минуса
+    const totalText = (totalSpan.textContent || '').replace(/[^\d.-]/g, '');
+    const total = parseFloat(totalText) || 0;
+    const cash = parseFloat(cashInput.value) || 0;
+    const change = cash - total;
+
+    // показываем как есть (может быть отрицательным)
+    changeSpan.textContent = change.toFixed(2);
+
+    // цветовое оформление
+    if (change >= 0) {
+      changeSpan.classList.add('positive');
+      changeSpan.classList.remove('negative');
+    } else {
+      changeSpan.classList.add('negative');
+      changeSpan.classList.remove('positive');
+    }
+  }
+
+  document.addEventListener('DOMContentLoaded', function() {
+    const cashInput = document.getElementById('cashGiven');
+    if (cashInput) {
+      cashInput.addEventListener('input', updateChange);
+    }
+
+    const cartTotal = document.getElementById('cart-total');
+    if (cartTotal) {
+      const observer = new MutationObserver(updateChange);
+      observer.observe(cartTotal, { childList: true });
+    }
+
+    updateChange(); // первый запуск
+  });
+})();
+</script>
+
+
+
+</html>
+
+

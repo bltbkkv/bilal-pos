@@ -1,0 +1,330 @@
+{% load custom_filters %}
+{% load static %}
+{% load tz %}
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <title>Отчёт по дате</title>
+  <link rel="stylesheet" href="{% static 'style.css' %}">
+  <style>
+    body {
+      margin: 0;
+      font-family: 'Segoe UI', sans-serif;
+      background: #1e1e1e;
+      color: #f0f0f0;
+    }
+    .topbar {
+      background: #222;
+      color: white;
+      padding: 14px 28px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .topbar .brand {
+      font-size: 20px;
+      font-weight: bold;
+    }
+    .topbar .nav a {
+      color: white;
+      margin-left: 20px;
+      font-weight: bold;
+      text-decoration: none;
+    }
+    .topbar .nav a:hover {
+      color: #ffc107;
+    }
+
+    .container {
+      max-width: 1000px;
+      margin: auto;
+      padding: 30px;
+    }
+    h2 {
+      font-size: 24px;
+      margin-bottom: 20px;
+      color: #fff;
+    }
+
+    .filter-box {
+      background: #2c2c2c;
+      padding: 20px;
+      border-radius: 8px;
+      margin-bottom: 30px;
+    }
+    .filter-box label {
+      display: block;
+      margin-bottom: 6px;
+      font-weight: bold;
+      color: #ccc;
+    }
+    .filter-box input {
+      width: 100%;
+      padding: 8px;
+      margin-bottom: 12px;
+      border: 1px solid #444;
+      border-radius: 4px;
+      background: #1a1a1a;
+      color: #f0f0f0;
+    }
+    .filter-box button {
+      background: #28a745;
+      color: white;
+      border: none;
+      padding: 10px 20px;
+      border-radius: 6px;
+      font-size: 15px;
+      cursor: pointer;
+    }
+
+    .summary {
+      margin-bottom: 20px;
+      font-size: 16px;
+      color: #ccc;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      background: #2a2a2a;
+      border-radius: 6px;
+      overflow: hidden;
+    }
+    th, td {
+      padding: 12px;
+      border-bottom: 1px solid #444;
+      text-align: left;
+    }
+    th {
+      background: #333;
+      color: #ffc107;
+    }
+    td {
+      color: #f0f0f0;
+    }
+  </style>
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">Mediar fried chiken</div>
+    <div class="nav">
+      <a href="/menu/">Меню</a>
+      <a href="{% url 'orders_list' %}">Заказы</a>
+    </div>
+  </header>
+
+  <div class="container">
+    <h2>Фильтр по дате и времени</h2>
+    <form method="post" class="filter-box">
+      {% csrf_token %}
+      {% if login_required %}
+        <label>Пароль для доступа:</label>
+        <input type="password" name="password" required>
+        {% if login_error %}
+          <p style="color:#ff4d4d;">{{ login_error }}</p>
+        {% endif %}
+      {% else %}
+        <label>Начало даты:</label>
+        <input type="date" name="start" value="{{ start_date }}">
+        <label>Конец даты:</label>
+        <input type="date" name="end" value="{{ end_date }}">
+        <label>Начало времени:</label>
+        <input type="time" name="start_time" value="{{ start_time }}">
+        <label>Конец времени:</label>
+        <input type="time" name="end_time" value="{{ end_time }}">
+        <button type="submit">Сформировать</button>
+      {% endif %}
+    </form>
+
+    {% if not login_required %}
+      <div class="summary">
+        <p>Количество заказов: <strong>{{ count }}</strong></p>
+        <p>Общая сумма: <strong>{{ total }} сом</strong></p>
+        <!-- 🔹 добавлено -->
+        <p>Общая прибыль: <strong>{{ profit }} сом</strong></p>
+      </div>
+
+      <form method="get" action="{% url 'report_receipt' %}">
+        <input type="hidden" name="start" value="{{ start_date }}">
+        <input type="hidden" name="end" value="{{ end_date }}">
+        <input type="hidden" name="start_time" value="{{ start_time }}">
+        <input type="hidden" name="end_time" value="{{ end_time }}">
+        <button type="submit">Выдать чек</button>
+      </form>
+   {% load custom_filters %}
+
+<table>
+  <tr>
+    <th>Ингредиент</th>
+    <th>Привезено</th>
+    <th>Использовано</th>
+    <th>Остаток</th>
+  </tr>
+
+  <tr>
+    <td>M-лаваш</td>
+    <td><input type="number" name="delivered_lavash_m" value="{{ delivered_lavash_m|default:0 }}"></td>
+    <td>
+      {% if ingredients_usage %}
+        <span>{{ ingredients_usage|get_item:"lavash_m" }}</span>
+      {% else %}
+        <span>0</span>
+      {% endif %}
+    </td>
+    <td>
+      {% if ingredients_usage %}
+        <span>{{ delivered_lavash_m|default:0|add:"-"|add:ingredients_usage|get_item:"lavash_m"|default:"0" }}</span>
+      {% else %}
+        <span>{{ delivered_lavash_m|default:0 }}</span>
+      {% endif %}
+    </td>
+  </tr>
+  <tr>
+    <td>Л-лаваш</td>
+    <td><input type="number" name="delivered_lavash_l" value="{{ delivered_lavash_l|default:0 }}"></td>
+    <td>
+      {% if ingredients_usage %}
+        <span>{{ ingredients_usage|get_item:"lavash_l" }}</span>
+      {% else %}
+        <span>0</span>
+      {% endif %}
+    </td>
+    <td>
+      {% if ingredients_usage %}
+        <span>{{ delivered_lavash_l|default:0|add:"-"|add:ingredients_usage|get_item:"lavash_l"|default:"0" }}</span>
+      {% else %}
+        <span>{{ delivered_lavash_l|default:0 }}</span>
+      {% endif %}
+    </td>
+  </tr>
+  <tr>
+    <td>Сырный лаваш</td>
+    <td><input type="number" name="delivered_lavash_s" value="{{ delivered_lavash_s|default:0 }}"></td>
+    <td>
+      {% if ingredients_usage %}
+        <span>{{ ingredients_usage|get_item:"lavash_s" }}</span>
+      {% else %}
+        <span>0</span>
+      {% endif %}
+    </td>
+    <td>
+      {% if ingredients_usage %}
+        <span>{{ delivered_lavash_s|default:0|add:"-"|add:ingredients_usage|get_item:"lavash_s"|default:"0" }}</span>
+      {% else %}
+        <span>{{ delivered_lavash_s|default:0 }}</span>
+      {% endif %}
+    </td>
+  </tr>
+
+  <tr>
+  <td>Булочка</td>
+  <td><input type="number" name="delivered_bun" value="{{ delivered_bun|default:0 }}"></td>
+  <td>
+    {% if ingredients_usage %}
+      <span>{{ ingredients_usage|get_item:"bun" }}</span>
+    {% else %}
+      <span>0</span>
+    {% endif %}
+  </td>
+  <td>
+    {% if ingredients_usage %}
+      <span>{{ delivered_bun|default:0|add:"-"|add:ingredients_usage|get_item:"bun"|default:"0" }}</span>
+    {% else %}
+      <span>{{ delivered_bun|default:0 }}</span>
+    {% endif %}
+  </td>
+</tr>
+
+<tr>
+  <td>Стрипсы (кг)</td>
+  <td><input type="number" step="0.1" name="delivered_strips" value="{{ delivered_strips|default:0 }}"></td>
+  <td>
+    {% if ingredients_usage %}
+      <span>{{ ingredients_usage|get_item:"strips" }}</span>
+    {% else %}
+      <span>0</span>
+    {% endif %}
+  </td>
+  <td>
+    {% if ingredients_usage %}
+      <span>{{ delivered_strips|default:0|add:"-"|add:ingredients_usage|get_item:"strips"|default:"0" }}</span>
+    {% else %}
+      <span>{{ delivered_strips|default:0 }}</span>
+    {% endif %}
+  </td>
+</tr>
+
+<tr>
+  <td>Крылышки (шт)</td>
+  <td><input type="number" name="delivered_wings" value="{{ delivered_wings|default:0 }}"></td>
+  <td>
+    {% if ingredients_usage %}
+      <span>{{ ingredients_usage|get_item:"wings" }}</span>
+    {% else %}
+      <span>0</span>
+    {% endif %}
+  </td>
+  <td>
+    {% if ingredients_usage %}
+      <span>{{ delivered_wings|default:0|add:"-"|add:ingredients_usage|get_item:"wings"|default:"0" }}</span>
+    {% else %}
+      <span>{{ delivered_wings|default:0 }}</span>
+    {% endif %}
+  </td>
+</tr>
+
+  <!-- и так далее для булочек, стрипсов, крылышек -->
+</table>
+
+<script>
+  function recalc() {
+    const delivered = {};
+    const used = {};
+    document.querySelectorAll('.delivered').forEach(inp => {
+      const key = inp.dataset.key;
+      delivered[key] = parseFloat(inp.value || 0);
+    });
+    document.querySelectorAll('.used').forEach(span => {
+      const key = span.dataset.key;
+      used[key] = parseFloat(span.textContent || 0);
+    });
+    document.querySelectorAll('.left').forEach(span => {
+      const key = span.dataset.key;
+      const left = (delivered[key] || 0) - (used[key] || 0);
+      span.textContent = left.toFixed(2);
+    });
+  }
+
+  document.querySelectorAll('.delivered').forEach(inp => {
+    inp.addEventListener('input', recalc);
+  });
+
+  recalc();
+</script>
+
+      <!-- 🔹 таблица детализации по товарам -->
+      <h2>Прибыль по товарам</h2>
+      <table>
+        <tr>
+          <th>Товар</th>
+          <th>Цена продажи</th>
+          <th>Себестоимость</th>
+          <th>Количество</th>
+          <th>Прибыль</th>
+        </tr>
+        {% for item in items_profit %}
+        <tr>
+          <td>{{ item.product__name }}</td>
+          <td>{{ item.product__price }}</td>
+          <td>{{ item.product__cost_price }}</td>
+          <td>{{ item.total_qty }}</td>
+          <td>{{ item.total_profit }}</td>
+        </tr>
+        {% endfor %}
+      </table>
+    {% endif %}
+  </div>
+</body>
+</html>
+

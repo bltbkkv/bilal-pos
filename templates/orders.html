@@ -1,0 +1,266 @@
+{% load static %}
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <title>Заказы — Готовятся</title>
+  <link rel="stylesheet" href="{% static 'style.css' %}">
+  <style>
+    body {
+      margin: 0;
+      font-family: 'Segoe UI', sans-serif;
+      background: #f0f2f5;
+    }
+    .topbar {
+      background: #1f1f1f;
+      color: white;
+      padding: 12px 24px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+    }
+    .topbar .brand {
+      font-size: 22px;
+      font-weight: bold;
+    }
+    .topbar .nav a {
+      color: white;
+      margin-left: 24px;
+      font-weight: bold;
+      text-decoration: none;
+      transition: color 0.2s ease;
+    }
+    .topbar .nav a:hover {
+      color: #ffc107;
+    }
+    .container {
+      padding: 30px;
+      max-width: 900px;
+      margin: auto;
+    }
+    h2 {
+      margin-bottom: 20px;
+      font-size: 24px;
+      color: #333;
+    }
+    .order-card {
+      background: white;
+      border-radius: 10px;
+      padding: 20px;
+      margin-bottom: 20px;
+      box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+      transition: transform 0.2s ease;
+    }
+    .order-card:hover {
+      transform: scale(1.01);
+    }
+    .order-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 10px;
+    }
+    .order-header h3 {
+      margin: 0;
+      font-size: 20px;
+      color: #444;
+    }
+    .order-items {
+      margin: 10px 0;
+      padding-left: 0;
+      list-style: none;
+      color: #555;
+    }
+    .order-items li {
+      margin-bottom: 6px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .btn-problem {
+      width: 32px;
+      height: 32px;
+      background: #ffc107;
+      border: none;
+      font-size: 20px;
+      font-weight: bold;
+      border-radius: 6px;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      padding: 0;
+      transition: background 0.2s ease;
+    }
+    .btn-problem:hover {
+      background: #e0a800;
+    }
+
+    .btn-cancel {
+      background: #dc3545;
+      color: white;
+      border: none;
+      padding: 8px 16px;
+      border-radius: 6px;
+      font-size: 14px;
+      cursor: pointer;
+      transition: background 0.2s ease;
+    }
+    .btn-cancel:hover {
+      background: #c82333;
+    }
+
+    .btn-ready {
+      background: #28a745;
+      color: white;
+      border: none;
+      padding: 8px 16px;
+      border-radius: 6px;
+      font-size: 14px;
+      cursor: pointer;
+      transition: background 0.2s ease;
+    }
+    .btn-ready:hover {
+      background: #218838;
+    }
+
+    .order-card.problem {
+      background-color: #f8d7da !important;
+      border: 1px solid #dc3545;
+    }
+  </style>
+
+  <script>
+    async function markReady(orderId) {
+      const resp = await fetch(`/orders/${orderId}/ready/`);
+      const data = await resp.json();
+      if (data.ok) {
+        const el = document.getElementById('order-' + orderId);
+        if (el) el.remove();
+      } else {
+        alert('Ошибка при смене статуса');
+      }
+    }
+
+    async function cancelOrder(orderId) {
+      const resp = await fetch(`/orders/${orderId}/cancel/`);
+      const data = await resp.json();
+      if (data.ok) {
+        const el = document.getElementById('order-' + orderId);
+        if (el) el.remove();
+        alert('Заказ отменён');
+      } else {
+        alert('Ошибка при отмене заказа');
+      }
+    }
+
+  async function cancelItem(itemId) {
+    const resp = await fetch(`/order-items/${itemId}/cancel/`);
+    const data = await resp.json();
+    if (!data.ok) {
+      alert('Ошибка при отмене блюда');
+      return;
+    }
+
+    const btn = document.querySelector(`button[onclick="cancelItem(${itemId})"]`);
+    if (btn) {
+      btn.outerHTML = "❌ Отменено";
+    }
+
+    const orderBlock = btn ? btn.closest('.order-card') : null;
+    if (!orderBlock) return;
+
+    // Если сервер сказал, что заказ отменён — удаляем сразу
+    if (data.order_cancelled) {
+      orderBlock.remove();
+      return;
+    }
+
+    // Fallback: если кнопок отмены больше не осталось — тоже удаляем
+    const stillActive = orderBlock.querySelectorAll('button[onclick^="cancelItem"]').length;
+    if (stillActive === 0) {
+      orderBlock.remove();
+    }
+  }
+
+
+
+    async function toggleProblem(button, orderId) {
+      const resp = await fetch(`/orders/${orderId}/toggle-paid/`);
+      const data = await resp.json();
+      if (data.ok) {
+        const orderBlock = button.closest('.order-card');
+        if (orderBlock) {
+          if (!data.is_paid) {
+            orderBlock.classList.add('problem');
+          } else {
+            orderBlock.classList.remove('problem');
+          }
+        }
+      } else {
+        alert('Ошибка при изменении статуса оплаты');
+      }
+    }
+
+function reprintReceipt(orderId) {
+    fetch(`/orders/${orderId}/receipt/reprint/`, { method: 'GET' })
+      .then(r => r.json())
+      .then(data => {
+          if (data.ok) alert("Чек повторно напечатан");
+      });
+}
+
+  </script>
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">Mediar fried chiken</div>
+    <div class="nav">
+      <a href="/menu/">Меню</a>
+      <a href="{% url 'report_by_date' %}">Отчёт</a>
+      <a href="{% url 'orders_list' %}">Заказы</a>
+    </div>
+  </header>
+
+  <div class="container">
+    <h2>Заказы — Готовятся</h2>
+    {% for order in orders %}
+      {% if order.status == 'pending' and not order.cancelled %}
+        <div class="order-card {% if not order.is_paid %}problem{% endif %}" id="order-{{ order.id }}">
+          <div class="order-header">
+            <h3>Заказ №{{ order.id }} — {{ order.total }} сом</h3>
+            <a href="{% url 'edit_order' order.id %}" class="btn btn-edit">Редактировать</a>
+            <div style="display:flex; align-items:center; gap:10px;">
+              <button onclick="toggleProblem(this, {{ order.id }})"
+                      class="btn-problem"
+                      title="Отметить как неоплаченный">?</button>
+              <button onclick="reprintReceipt(91)">Повторно напечатать чек</button>
+              <button class="btn-cancel" onclick="cancelOrder({{ order.id }})">Отменить</button>
+              <button class="btn-ready" onclick="markReady({{ order.id }})">Готово</button>
+            </div>
+          </div>
+          <ul class="order-items">
+            {% for item in order.items.all %}
+              <li>
+                <span>{{ item.product.name }} × {{ item.quantity }}</span>
+                {% if not item.cancelled %}
+                  <button onclick="cancelItem({{ item.id }})"
+                          style="background:none; border:none; color:#dc3545; font-size:32px; cursor:pointer;"
+                          title="Отменить">×</button>
+                {% else %}
+                  <span style="color:#dc3545; font-size:18px;">❌ Отменено</span>
+                {% endif %}
+              </li>
+            {% endfor %}
+          </ul>
+        </div>
+      {% endif %}
+    {% empty %}
+      <p style="color:#666;">Нет заказов в статусе «Готовится»</p>
+    {% endfor %}
+  </div>
+</body>
+</html>
+

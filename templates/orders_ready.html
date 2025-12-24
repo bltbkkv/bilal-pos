@@ -1,0 +1,49 @@
+<!-- templates/orders_ready.html -->
+{% load static %}
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <title>Заказы — Готово</title>
+  <link rel="stylesheet" href="{% static 'style.css' %}">
+  <style>
+    .ready-row { display: flex; gap: 16px; overflow-x: auto; padding: 20px; }
+    .order-box { min-width: 220px; background: #fff; border-radius: 10px; box-shadow: 0 2px 6px rgba(0,0,0,0.1); padding: 16px; }
+    .order-box h4 { margin: 0 0 8px; }
+    .order-box .items { color: #555; font-size: 14px; }
+    .btn-edit { display: inline-block; margin-top: 10px; background: #007bff; color: #fff; padding: 6px 12px; border-radius: 6px; text-decoration: none; }
+    .btn-edit:hover { background: #0069d9; }
+  </style>
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">Mediar fried chiken</div>
+    <div class="nav">
+      <a href="/menu/">Меню</a>
+      <a href="{% url 'report_by_date' %}">Отчёт</a>
+      <a href="{% url 'orders_list' %}">Готовятся</a>
+      <a href="{% url 'orders_ready_list' %}">Готово</a>
+    </div>
+  </header>
+
+  <h2 style="padding: 20px;">Заказы — Готово</h2>
+  <div class="ready-row">
+    {% for order in orders %}
+      <div class="order-box">
+        <h4>Заказ №{{ order.id }}</h4>
+        <div>{{ order.total }} сом</div>
+        <div class="items">
+          {% for it in order.items.all %}
+            {% if not it.cancelled %}
+              <div>{{ it.product.name }} × {{ it.quantity }}</div>
+            {% endif %}
+          {% endfor %}
+        </div>
+        <a class="btn-edit" href="{% url 'edit_order' order.id %}">Редактировать</a>
+      </div>
+    {% empty %}
+      <p>Нет заказов в статусе «Готово»</p>
+    {% endfor %}
+  </div>
+</body>
+</html>

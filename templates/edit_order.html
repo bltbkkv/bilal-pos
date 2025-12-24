@@ -1,0 +1,137 @@
+{% load static %}
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <title>Редактирование заказа №{{ order.id }}</title>
+  <link rel="stylesheet" href="{% static 'style.css' %}">
+  <style>
+    body { font-family: sans-serif; background: #f5f5f5; color: #222; margin: 0; }
+    .topbar { background: #222; color: white; padding: 10px 20px; display: flex; justify-content: space-between; align-items: center; }
+    .topbar .nav a { color: white; margin-left: 20px; text-decoration: none; }
+    .wrap { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; padding: 20px; }
+    .panel { background: white; padding: 16px; border-radius: 10px; box-shadow: 0 2px 6px rgba(0,0,0,0.1); }
+    .panel h3 { margin-top: 0; }
+    .item-row { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+    .btn { cursor: pointer; border: none; padding: 6px 12px; border-radius: 6px; }
+    .btn-green { background: #28a745; color: white; }
+    .btn-danger { background: #dc3545; color: white; }
+    .btn-primary { background: #007bff; color: white; }
+    .total { font-weight: bold; font-size: 18px; margin-top: 10px; }
+    .tabs { display: flex; gap: 8px; margin-bottom: 10px; flex-wrap: wrap; }
+    .tab-btn { background: #eee; border: none; padding: 6px 12px; border-radius: 6px; cursor: pointer; }
+    .tab-btn:hover { background: #ddd; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 8px; }
+    .product-card { border: 1px solid #eee; border-radius: 8px; padding: 8px; display: flex; justify-content: space-between; align-items: center; background: #fafafa; }
+  </style>
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">Mediar fried chiken</div>
+    <div class="nav">
+      <a href="/menu/">Меню</a>
+      <a href="{% url 'orders_ready_list' %}">Готово</a>
+    </div>
+  </header>
+
+  <div class="wrap">
+    <div class="panel">
+      <h3>Заказ №{{ order.id }}</h3>
+      <div id="order-items">
+        {% for it in items %}
+          <div class="item-row">
+            <div>{{ it.product.name }} × {{ it.quantity }} — {{ it.line_total }} сом</div>
+            <button class="btn btn-danger" onclick="removeItem({{ it.id }})">Удалить</button>
+          </div>
+        {% endfor %}
+      </div>
+      <div class="total">Итого: <span id="order-total">{{ order.total }} сом</span></div>
+      <button class="btn btn-primary" onclick="recalc({{ order.id }})">Пересчитать</button>
+    </div>
+
+    <div class="panel">
+      <h3>Добавить блюда</h3>
+      <div class="tabs">
+        {% for cat in categories %}
+          <button class="tab-btn" onclick="showTab('{{ cat }}')">{{ cat }}</button>
+        {% endfor %}
+      </div>
+
+      {% for cat in categories %}
+        <div class="tab-content" id="tab-{{ cat }}" style="display: none;">
+          <div class="grid">
+            {% for p in products %}
+              {% if p.category == cat %}
+                <div class="product-card">
+                  <div>{{ p.name }} — {{ p.price }} сом</div>
+                  <button class="btn btn-green" onclick="addItem({{ order.id }}, {{ p.id }})">+</button>
+                </div>
+              {% endif %}
+            {% endfor %}
+          </div>
+        </div>
+      {% endfor %}
+    </div>
+  </div>
+
+  <script>
+    function showTab(cat) {
+      document.querySelectorAll('.tab-content').forEach(el => el.style.display = 'none');
+      document.getElementById('tab-' + cat).style.display = 'block';
+    }
+
+    document.addEventListener('DOMContentLoaded', () => {
+      const firstTab = document.querySelector('.tab-content');
+      if (firstTab) firstTab.style.display = 'block';
+    });
+
+    async function addItem(orderId, productId) {
+      const resp = await fetch(`/orders/${orderId}/add-item/`, {
+        method: 'POST',
+        headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({product_id: productId, qty: 1})
+      });
+      const data = await resp.json();
+      if (!data.ok) { alert(data.error || 'Ошибка добавления'); return; }
+      redrawItems(data.items, data.total);
+    }
+
+    async function removeItem(itemId) {
+      const resp = await fetch(`/order-items/${itemId}/remove/`, { method: 'POST' });
+      const data = await resp.json();
+      if (!data.ok) { alert(data.error || 'Ошибка удаления'); return; }
+      redrawItems(data.items, data.total);
+    }
+
+   async function recalc(orderId) {
+  const resp = await fetch(`/orders/${orderId}/recalc/`, { method: 'POST' });
+  const data = await resp.json();
+  if (!data.ok) {
+    alert('Ошибка пересчёта');
+    return;
+  }
+  redrawItems(data.items, data.total);
+
+  // 🔹 Автоматический переход обратно во вкладку "Заказы"
+  window.location.href = "/orders/";
+}
+
+
+    function redrawItems(items, total) {
+      const list = document.getElementById('order-items');
+      list.innerHTML = '';
+      items.forEach(it => {
+        const row = document.createElement('div');
+        row.className = 'item-row';
+        row.innerHTML = `
+          <div>${it.name} × ${it.quantity} — ${it.line_total} сом</div>
+          <button class="btn btn-danger" onclick="removeItem(${it.id})">Удалить</button>
+        `;
+        list.appendChild(row);
+      });
+      document.getElementById('order-total').innerText = total + ' сом';
+    }
+  </script>
+</body>
+</html>
+
