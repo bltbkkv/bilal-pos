@@ -7,22 +7,22 @@
   <link rel="stylesheet" href="{% static 'style.css' %}">
   <style>
     body { font-family: sans-serif; background: #f5f5f5; color: #222; margin: 0; }
-    .topbar { background: #222; color: white; padding: 10px 20px; display: flex; justify-content: space-between; align-items: center; }
-    .topbar .nav a { color: white; margin-left: 20px; text-decoration: none; }
+    .topbar { background: #222; color: white; padding: 20px; display: flex; justify-content: space-between; align-items: center; font-size: 20px; }
+    .topbar .nav a { color: white; margin-left: 20px; text-decoration: none; font-size: 20px; }
     .wrap { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; padding: 20px; }
-    .panel { background: white; padding: 16px; border-radius: 10px; box-shadow: 0 2px 6px rgba(0,0,0,0.1); }
-    .panel h3 { margin-top: 0; }
-    .item-row { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
-    .btn { cursor: pointer; border: none; padding: 6px 12px; border-radius: 6px; }
+    .panel { background: white; padding: 20px; border-radius: 12px; box-shadow: 0 2px 6px rgba(0,0,0,0.1); }
+    .panel h3 { margin-top: 0; font-size: 22px; }
+    .item-row { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; font-size: 20px; }
+    .btn { cursor: pointer; border: none; padding: 16px 24px; border-radius: 10px; font-size: 20px; }
     .btn-green { background: #28a745; color: white; }
     .btn-danger { background: #dc3545; color: white; }
     .btn-primary { background: #007bff; color: white; }
-    .total { font-weight: bold; font-size: 18px; margin-top: 10px; }
-    .tabs { display: flex; gap: 8px; margin-bottom: 10px; flex-wrap: wrap; }
-    .tab-btn { background: #eee; border: none; padding: 6px 12px; border-radius: 6px; cursor: pointer; }
+    .total { font-weight: bold; font-size: 22px; margin-top: 12px; }
+    .tabs { display: flex; gap: 12px; margin-bottom: 12px; flex-wrap: wrap; }
+    .tab-btn { background: #eee; border: none; padding: 16px 24px; border-radius: 10px; cursor: pointer; font-size: 18px; }
     .tab-btn:hover { background: #ddd; }
-    .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 8px; }
-    .product-card { border: 1px solid #eee; border-radius: 8px; padding: 8px; display: flex; justify-content: space-between; align-items: center; background: #fafafa; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 12px; }
+    .product-card { border: 2px solid #ddd; border-radius: 12px; padding: 16px; display: flex; justify-content: space-between; align-items: center; background: #fafafa; font-size: 18px; }
   </style>
 </head>
 <body>
@@ -30,8 +30,16 @@
     <div class="brand">Mediar fried chiken</div>
     <div class="nav">
       <a href="/menu/">Меню</a>
-      <a href="{% url 'orders_ready_list' %}">Готово</a>
+
     </div>
+
+    <div class="actions" style="margin-top: 20px; display: flex; gap: 12px; flex-wrap: wrap;">
+  <button class="btn btn-primary" onclick="reprintReceipt({{ order.id }})">🖨️ Чек</button>
+  <button class="btn btn-primary" onclick="callOrder({{ order.id }})">📢 Вызов</button>
+  <button class="btn btn-danger" onclick="cancelOrder({{ order.id }})">❌ Отменить</button>
+  <button class="btn btn-green" onclick="markReady({{ order.id }})">✅ Готово</button>
+</div>
+
   </header>
 
   <div class="wrap">
@@ -103,19 +111,16 @@
       redrawItems(data.items, data.total);
     }
 
-   async function recalc(orderId) {
-  const resp = await fetch(`/orders/${orderId}/recalc/`, { method: 'POST' });
-  const data = await resp.json();
-  if (!data.ok) {
-    alert('Ошибка пересчёта');
-    return;
-  }
-  redrawItems(data.items, data.total);
-
-  // 🔹 Автоматический переход обратно во вкладку "Заказы"
-  window.location.href = "/orders/";
-}
-
+    async function recalc(orderId) {
+      const resp = await fetch(`/orders/${orderId}/recalc/`, { method: 'POST' });
+      const data = await resp.json();
+      if (!data.ok) {
+        alert('Ошибка пересчёта');
+        return;
+      }
+      redrawItems(data.items, data.total);
+      window.location.href = "/orders/";
+    }
 
     function redrawItems(items, total) {
       const list = document.getElementById('order-items');
@@ -131,7 +136,33 @@
       });
       document.getElementById('order-total').innerText = total + ' сом';
     }
+
+    async function markReady(orderId) {
+  const resp = await fetch(`/orders/${orderId}/ready/`);
+  const data = await resp.json();
+  if (data.ok) window.location.href = "/orders/";
+  else alert("Ошибка при завершении заказа");
+}
+
+async function cancelOrder(orderId) {
+  const resp = await fetch(`/orders/${orderId}/cancel/`);
+  const data = await resp.json();
+  if (data.ok) window.location.href = "/orders/";
+  else alert("Ошибка при отмене заказа");
+}
+
+function reprintReceipt(orderId) {
+  fetch(`/orders/${orderId}/receipt/reprint/`)
+    .then(r => r.json())
+    .then(data => { if (data.ok) alert("Чек повторно напечатан"); });
+}
+
+function callOrder(orderId) {
+  fetch(`/orders/${orderId}/call/`)
+    .then(r => r.json())
+    .then(data => { if (data.ok) console.log("Вызов выполнен"); });
+}
+
   </script>
 </body>
 </html>
-

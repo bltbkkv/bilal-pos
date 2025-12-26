@@ -72,32 +72,39 @@ async function checkout() {
     items: cart.map(i => ({ id: i.id, name: i.name, price: i.price, qty: i.qty })),
     note
   };
+
   const res = await fetch('/orders/submit/', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload)
   });
+
   if (!res.ok) return alert('Ошибка оформления заказа');
   const data = await res.json();
-  // Открываем чек
-  window.open(`/orders/${data.order_id}/receipt/`, '_blank');
-  clearCart();
 
-  // ✅ Добавляем заказ в список "Готовятся" на главном экране
-  const pendingList = document.getElementById('pending-orders');
-  if (pendingList) {
-    const li = document.createElement('li');
-    li.id = 'order-' + data.order_id;
-    li.innerHTML = `
-      <strong>Заказ №${data.order_id}</strong> — ${fmt(payload.items.reduce((s,i)=>s+i.price*i.qty,0))} сом
-      <ul>
-        ${payload.items.map(i => `<li>${i.name} × ${i.qty}</li>`).join('')}
-      </ul>
-      <button onclick="markReady(${data.order_id})">Готово</button>
-    `;
-    pendingList.appendChild(li);
+  if (data.ok) {
+    alert("✅ Заказ оформлен и чек напечатан!");
+    clearCart();
+
+    // ✅ Добавляем заказ в список "Готовятся" на главном экране
+    const pendingList = document.getElementById('pending-orders');
+    if (pendingList) {
+      const li = document.createElement('li');
+      li.id = 'order-' + data.order_id;
+      li.innerHTML = `
+        <strong>Заказ №${data.order_id}</strong> — ${fmt(payload.items.reduce((s,i)=>s+i.price*i.qty,0))} сом
+        <ul>
+          ${payload.items.map(i => `<li>${i.name} × ${i.qty}</li>`).join('')}
+        </ul>
+        <button onclick="markReady(${data.order_id})">Готово</button>
+      `;
+      pendingList.appendChild(li);
+    }
+  } else {
+    alert("Ошибка: " + (data.error || ""));
   }
 }
+
 
 // Bind
 window.addEventListener('DOMContentLoaded', () => {

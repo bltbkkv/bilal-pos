@@ -7,6 +7,11 @@ from django.utils import timezone
 from django.db import models
 from django.db.models import Sum
 import io, json
+# Добавь импорт наверх файла
+from django.db.models.functions import Coalesce
+from django.db.models import Value
+
+from .sound import generate_voice
 import win32print
 import win32ui
 from django.views.decorators.http import require_GET
@@ -30,7 +35,7 @@ from django.http import HttpResponse
 from django.template.loader import render_to_string
 from django.contrib.auth import login
 from django.conf import settings
-
+from .sound import generate_voice
 
 
 
@@ -45,6 +50,7 @@ def menu(request):
         'categories': categories,
         'products': products
     })
+
 
 
 @csrf_exempt
@@ -65,13 +71,12 @@ def submit_order(request):
 
     total = sum(Decimal(str(i['price'])) * int(i['qty']) for i in items)
 
-    # заказ создаётся со статусом "Готовится"
     order = Order.objects.create(
         employee=emp,
         total=total,
         note=data.get('note', ''),
         status='pending',
-        order_type=data.get('order_type', 'here')  # 🔹 сохраняем тип заказа
+        order_type=data.get('order_type', 'here')
     )
 
     for i in items:
@@ -81,10 +86,14 @@ def submit_order(request):
             product=product,
             quantity=int(i['qty']),
             price=Decimal(str(i['price'])),
-            options=i.get('options', [])  # 🔹 сохраняем модификаторы
+            options=i.get('options', [])
         )
 
+    # ✅ Печатаем чек сразу
+    print_receipt_direct(order)
+
     return JsonResponse({'ok': True, 'order_id': order.id, 'status': order.status})
+
 
 
 
@@ -99,66 +108,71 @@ def mark_order_ready(request, order_id):
 
 def print_receipt_view(request, order_id):
     order = get_object_or_404(Order, id=order_id)
-    buffer = io.BytesIO()
 
-    # 🔹 Подключаем кириллический шрифт
-    font_path = os.path.join(settings.BASE_DIR, 'static', 'fonts', 'ttf', 'DejaVuSans.ttf')
-    pdfmetrics.registerFont(TTFont('DejaVu', font_path))
-    font_name = "DejaVu"
-    font_size = 10
+    import win32print
+    import win32ui
 
-    # 🔹 Собираем все строки для измерения ширины
-    lines = [
-        "Bilal Fried Chicken POS",
-        "Адрес: Бишкек, Чуйская область",
-        "Тел: +996 XXX XX-XX-XX",
-        f"Чек №{order.id}",
-        f"Кассир: {order.employee.name if order.employee else '-'}",
-        f"Дата: {order.order_time.strftime('%d.%m.%Y %H:%M')}",
-        f"Тип заказа: {order.get_order_type_display()}",
-    ]
+    PRINTER_CASH = "XP-80C (copy 1)"   # кассовый принтер
+    PRINTER_KITCHEN = "XP-80C (copy 1)"  # кухонный (можно указать другой, если есть)
 
-    active_items = order.items.filter(cancelled=False)
-    for item in active_items:
-        opts = f" ({', '.join(item.options)})" if item.options else ""
-        lines.append(f"{item.product.name}{opts} x{item.quantity} — {item.line_total:.2f} сом")
+    def _print_on_printer(printer_name, items_filter=None):
+        pdc = win32ui.CreateDC()
+        pdc.CreatePrinterDC(printer_name)
+        pdc.StartDoc(f"Чек №{order.id}")
+        pdc.StartPage()
 
-    total_active = sum(i.line_total for i in active_items)
-    lines.append(f"Итого: {total_active:.2f} сом")
+        x, y = 50, 50
+        line_height = 80
 
-    if order.note:
-        lines.append(f"Комментарий: {order.note}")
+        def write(line, indent=0):
+            nonlocal y
+            pdc.TextOut(x + indent, y, line)
+            y += line_height
 
-    lines.append("Спасибо за покупку!")
+        # Заголовок
+        write("Bilal Fried Chicken POS")
+        write(f"Заказ №{order.id}")
+        write(f"Кассир: {order.employee.name if order.employee else '-'}")
+        write(f"Дата: {order.order_time.strftime('%d.%m.%Y %H:%M')}")
+        write("--------------------------------")
 
-    # 🔹 Расчёт высоты страницы
-    lines_count = len(lines)
-    height = max(400, 100 + lines_count * 25)  # минимум 400 мм
+        # Позиции заказа
+        items = order.items.filter(cancelled=False)
+        if items_filter:
+            items = items.exclude(product__category__in=items_filter)
 
-    # 🔹 Расчёт ширины страницы (автоматически)
-    max_text_width = max(pdfmetrics.stringWidth(line, font_name, font_size) for line in lines)
-    width = max(80 * mm, max_text_width + 40)  # минимум 80 мм, плюс отступ
+        for item in items:
+            opts = f" ({', '.join(item.options)})" if item.options else ""
+            write(f"{item.product.name}{opts} x{item.quantity} — {item.line_total:.2f} сом")
 
-    # 🔹 Генерация PDF
-    c = canvas.Canvas(buffer, pagesize=(width, height))
-    c.setFont(font_name, font_size)
+        total = sum(i.line_total for i in items)
+        write("--------------------------------")
+        write(f"Итого: {total:.2f} сом")
 
-    # 🔹 Начальная координата
-    y = height - 40
+        if order.note:
+            write(f"Комментарий: {order.note}")
 
-    # 🔹 Вывод строк
-    for line in lines:
-        if y < 50:
-            c.showPage()
-            y = height - 40
-            c.setFont(font_name, font_size)
-        c.drawString(20, y, line)
-        y -= 20
+        write("Спасибо за покупку!")
 
-    c.showPage()
-    c.save()
-    buffer.seek(0)
-    return FileResponse(buffer, as_attachment=False, filename=f"receipt_{order.id}.pdf")
+        pdc.EndPage()
+        pdc.EndDoc()
+        pdc.DeleteDC()
+
+    # 🔹 Печатаем полный чек на кассовом принтере
+    try:
+        _print_on_printer(PRINTER_CASH)
+    except Exception as e:
+        print(f"Ошибка печати на кассовом принтере: {e}")
+
+    # 🔹 Печатаем кухонный чек без напитков, соусов и макаронсов
+    try:
+        _print_on_printer(PRINTER_KITCHEN, items_filter=["Напитки", "Соусы", "Макаронсы"])
+    except Exception as e:
+        print(f"Ошибка печати на кухонном принтере: {e}")
+
+    return JsonResponse({'ok': True, 'order_id': order.id, 'status': order.status})
+
+
 
 
 
@@ -202,22 +216,23 @@ def report_by_date(request):
             start_dt = None
             end_dt = None
 
-        orders = Order.objects.all()
+        # только активные заказы
+        orders = Order.objects.filter(cancelled=False)
         if start_dt and end_dt:
             orders = orders.filter(order_time__range=(start_dt, end_dt))
 
-        total = orders.aggregate(Sum('total'))['total__sum'] or 0
+        total = orders.aggregate(Sum('total'))['total__sum'] or Decimal('0')
         count = orders.count()
 
-        # общая прибыль
-        profit = OrderItem.objects.filter(order__in=orders).aggregate(
+        # общая прибыль только по неотменённым позициям
+        profit = OrderItem.objects.filter(order__in=orders, cancelled=False).aggregate(
             total_profit=Sum(
                 ExpressionWrapper(
                     (F('price') - F('product__cost_price')) * F('quantity'),
-                    output_field=DecimalField()
+                    output_field=DecimalField(max_digits=12, decimal_places=2)
                 )
             )
-        )['total_profit'] or 0
+        )['total_profit'] or Decimal('0')
 
         # прибыль по каждому товару
         items_profit = OrderItem.objects.filter(order__in=orders, cancelled=False).values(
@@ -229,12 +244,15 @@ def report_by_date(request):
             total_profit=Sum(
                 ExpressionWrapper(
                     (F('price') - F('product__cost_price')) * F('quantity'),
-                    output_field=DecimalField()
+                    output_field=DecimalField(max_digits=12, decimal_places=2)
                 )
             )
         ).order_by('-total_profit')
 
-        # расход ингредиентов: исключаем отменённые позиции и считаем как Decimal
+        # расход ингредиентов — учитываем NULL через Coalesce
+        from django.db.models.functions import Coalesce
+        from django.db.models import Value
+
         ingredients_usage_qs = (
             OrderItem.objects
             .filter(order__in=orders, cancelled=False)
@@ -242,59 +260,75 @@ def report_by_date(request):
             .annotate(
                 used=Sum(
                     ExpressionWrapper(
-                        F('quantity') * F('product__ingredient_usage'),
+                        F('quantity') * Coalesce(F('product__ingredient_usage'), Value(0)),
                         output_field=DecimalField(max_digits=12, decimal_places=2)
                     )
                 )
             )
         )
-        usage_dict = {
-            row['product__ingredient_type']: (row['used'] or Decimal('0'))
+
+        # нормализуем имя типа ингредиента
+        usage_by_full_name = {
+            (row['product__ingredient_type'] or '').strip(): (row['used'] or Decimal('0'))
             for row in ingredients_usage_qs
         }
 
-        # ввод поставок
-        delivered_lavash_m = Decimal(request.POST.get('delivered_lavash_m') or 0)
-        delivered_lavash_l = Decimal(request.POST.get('delivered_lavash_l') or 0)
-        delivered_lavash_s = Decimal(request.POST.get('delivered_lavash_s') or 0)
-        delivered_bun = Decimal(request.POST.get('delivered_bun') or 0)
-        delivered_strips = Decimal(request.POST.get('delivered_strips') or 0)
-        delivered_wings = Decimal(request.POST.get('delivered_wings') or 0)
+        # безопасный парсинг поставок
+        def D(val):
+            s = (val or '').strip().replace(',', '.')
+            try:
+                return Decimal(s) if s else Decimal('0')
+            except Exception:
+                return Decimal('0')
 
-        # соответствие коротких ключей реальным названиям ingredient_type (кириллица!)
+        delivered_lavash_m = D(request.POST.get('delivered_lavash_m'))
+        delivered_lavash_l = D(request.POST.get('delivered_lavash_l'))
+        delivered_lavash_s = D(request.POST.get('delivered_lavash_s'))
+        delivered_bun      = D(request.POST.get('delivered_bun'))
+        delivered_strips   = D(request.POST.get('delivered_strips'))
+        delivered_wings    = D(request.POST.get('delivered_wings'))
+
+        # соответствие коротких ключей ↔ полные названия
         ING_MAP = {
-            'lavash_m': 'М-лаваш',         # кириллическая "М"
+            'lavash_m': 'М-лаваш',
             'lavash_l': 'Л-лаваш',
             'lavash_s': 'Сырный лаваш',
             'bun': 'Булочка',
-            'strips': 'Стрипсы (кг)',
-            'wings': 'Крылышки (шт)',
+            'strips': 'Стрипсы',  # 🔹 убрал (кг)
+            'wings': 'Крылышки',  # 🔹 убрал (шт)
         }
 
         supplies_short = {
             'lavash_m': delivered_lavash_m,
             'lavash_l': delivered_lavash_l,
             'lavash_s': delivered_lavash_s,
-            'bun': delivered_bun,
-            'strips': delivered_strips,
-            'wings': delivered_wings,
+            'bun':      delivered_bun,
+            'strips':   delivered_strips,
+            'wings':    delivered_wings,
         }
 
-        # считаем остатки строго по тем же именам, что в usage_dict
+        # используем короткие ключи для шаблона (ingredients_usage|get_item:"lavash_m")
+        usage_short = {}
         ingredients_left = {}
         ingredients_rows = []
+
+        for short_key, full_name in ING_MAP.items():
+            used = Decimal(usage_by_full_name.get(full_name, Decimal('0')))
+            usage_short[short_key] = used  # ✅ оставляем Decimal
+
         for short_key, delivered in supplies_short.items():
-            name = ING_MAP[short_key]
-            used = Decimal(usage_dict.get(name, Decimal('0')))
+            full_name = ING_MAP[short_key]
+            used = usage_short.get(short_key, Decimal('0'))
             left = delivered - used
-            # 🔹 Заполняем оба словаря
-            ingredients_left[name] = {
+            if left < 0:
+                left = Decimal('0')
+            ingredients_left[full_name] = {
                 'delivered': delivered,
                 'used': used,
                 'left': left
             }
             ingredients_rows.append({
-                'name': name,
+                'name': full_name,
                 'delivered': delivered,
                 'used': used,
                 'left': left
@@ -306,9 +340,14 @@ def report_by_date(request):
             'count': count,
             'profit': profit,
             'items_profit': items_profit,
-            'ingredients_usage': usage_dict,
+
+            # для шаблона (короткие ключи)
+            'ingredients_usage': usage_short,
+
+            # для вывода по полным именам или перехода на ingredients_rows
             'ingredients_left': ingredients_left,
             'ingredients_rows': ingredients_rows,
+
             'delivered_lavash_m': delivered_lavash_m,
             'delivered_lavash_l': delivered_lavash_l,
             'delivered_lavash_s': delivered_lavash_s,
@@ -326,6 +365,8 @@ def report_by_date(request):
 
 
 
+
+
 def orders_list(request):
     """
     Список заказов, которые готовятся.
@@ -340,12 +381,13 @@ def logout(request):
     return redirect("menu")
 
 
+from django.shortcuts import redirect
+
 def report_receipt(request):
-    # 🔹 Подключаем кириллический шрифт
-    font_path = os.path.join(settings.BASE_DIR, 'static', 'fonts', 'ttf', 'DejaVuSans.ttf')
-    pdfmetrics.registerFont(TTFont('DejaVu', font_path))
-    font_name = "DejaVu"
-    font_size = 10
+    from .models import Order, OrderItem
+    import win32print, win32ui
+
+    PRINTER_NAME = "XP-80C (copy 1)"  # твой принтер
 
     # 🔹 Получаем фильтры
     start_date = request.GET.get('start')
@@ -371,7 +413,6 @@ def report_receipt(request):
     total = active_orders.aggregate(Sum('total'))['total__sum'] or 0
     count = active_orders.count()
 
-    # 🔹 Собираем все строки для измерения ширины
     lines = [
         "Bilal Fried Chicken POS",
         "Отчёт по датам",
@@ -397,32 +438,33 @@ def report_receipt(request):
             opts = f" ({', '.join(item.options)})" if item.options else ""
             lines.append(f"{item.product.name}{opts} x{item.quantity} — ОТМЕНЕНО в {item.created_at.strftime('%d.%m.%Y %H:%M')}")
 
-    # 🔹 Расчёт высоты страницы (динамический)
-    lines_count = len(lines)
-    height = max(400, 100 + lines_count * 25 + 300)
+    # 🔹 Печать
+    pdc = win32ui.CreateDC()
+    pdc.CreatePrinterDC(PRINTER_NAME)
+    pdc.StartDoc("Отчёт по датам")
+    pdc.StartPage()
 
-    # 🔹 Расчёт ширины страницы (автоматически)
-    max_text_width = max(pdfmetrics.stringWidth(line, font_name, font_size) for line in lines)
-    width = max(80 * mm, max_text_width + 40)  # минимум 80 мм, плюс отступ
+    font = win32ui.CreateFont({
+        "name": "Arial",
+        "height": 24,
+        "weight": 600
+    })
+    pdc.SelectObject(font)
 
-    # 🔹 Генерация PDF
-    buffer = io.BytesIO()
-    c = canvas.Canvas(buffer, pagesize=(width, height))
-    c.setFont(font_name, font_size)
-
-    y = height - 40
+    x, y = 50, 50
+    line_height = 80
     for line in lines:
-        if y < 50:
-            c.showPage()
-            y = height - 40
-            c.setFont(font_name, font_size)
-        c.drawString(20, y, line)
-        y -= 20
+        pdc.TextOut(x, y, line)
+        y += line_height
 
-    c.showPage()
-    c.save()
-    buffer.seek(0)
-    return FileResponse(buffer, as_attachment=False, filename="report_receipt.pdf")
+    pdc.EndPage()
+    pdc.EndDoc()
+    pdc.DeleteDC()
+
+    # 🔹 Возвращаем пользователя обратно на страницу отчётов
+    return redirect("report_by_date")
+
+
 
 
 
@@ -594,8 +636,7 @@ def print_receipt_direct(order):
     import win32print
     import win32ui
 
-    printer2 = "POS-58(copy of 5)"
-    printer1 = "POS-58(copy of 4)"
+    PRINTER_NAME = "XP-80C (copy 1)"
 
     def _print_on_printer(printer_name, items_filter=None):
         hPrinter = win32print.OpenPrinter(printer_name)
@@ -648,16 +689,6 @@ def print_receipt_direct(order):
         pdc.DeleteDC()
 
     # 🔹 Печатаем полный чек на первом принтере
-    try:
-        _print_on_printer(printer1)
-    except Exception as e:
-        print(f"Ошибка печати на {printer1}: {e}")
-
-    # 🔹 Печатаем чек без напитков на втором принтере
-    try:
-        _print_on_printer(printer2, items_filter="Напитки")
-    except Exception as e:
-        print(f"Ошибка печати на {printer2}: {e}")
 
 
 
@@ -678,5 +709,60 @@ def reprint_receipt_view(request, order_id):
     order = get_object_or_404(Order, id=order_id)
     print_receipt_direct(order)  # 🔹 просто печатаем чек
     return JsonResponse({'ok': True, 'reprinted': True})
+
+
+
+def call_order(request, order_id):
+    try:
+        print(f"🔊 Вызов для заказа №{order_id}")
+        generate_voice(order_id)
+        return JsonResponse({"ok": True, "order_id": order_id})
+    except Exception as e:
+        print(f"❌ Ошибка вызова: {e}")
+        return JsonResponse({"ok": False, "error": str(e)})
+
+
+
+@csrf_exempt
+@require_POST
+def create_order_view(request):
+    """
+    Создание нового заказа из корзины.
+    Ожидает JSON: { employee_id, items: [{id, qty, price}], note }
+    """
+    try:
+        data = json.loads(request.body.decode("utf-8"))
+    except Exception:
+        return JsonResponse({"ok": False, "error": "Invalid JSON"}, status=400)
+
+    emp = Employee.objects.filter(id=data.get("employee_id")).first()
+    items = data.get("items", [])
+    if not items:
+        return JsonResponse({"ok": False, "error": "No items"}, status=400)
+
+    total = sum(Decimal(str(i["price"])) * int(i["qty"]) for i in items)
+
+    order = Order.objects.create(
+        employee=emp,
+        total=total,
+        note=data.get("note", ""),
+        status="pending",
+        order_type=data.get("order_type", "here")
+    )
+
+    for i in items:
+        product = get_object_or_404(Product, id=int(i["id"]))
+        OrderItem.objects.create(
+            order=order,
+            product=product,
+            quantity=int(i["qty"]),
+            price=Decimal(str(i["price"])),
+            options=i.get("options", [])
+        )
+
+    return JsonResponse({"ok": True, "order_id": order.id, "status": order.status})
+
+
+
 
 

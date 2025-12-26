@@ -70,6 +70,7 @@ class Order(models.Model):
     cancelled = models.BooleanField(default=False)
     is_paid = models.BooleanField(default=True)
     note = models.CharField(max_length=200, null=True, blank=True)
+    receipt_number = models.PositiveIntegerField(default=0)
     status = models.CharField(
         max_length=20,
         choices=STATUS_CHOICES,
@@ -148,4 +149,31 @@ class Supply(models.Model):
 
     def __str__(self):
         return f"{self.get_ingredient_display()} — {self.delivered_qty}"
+
+class DeletedItem(models.Model):
+    id = models.AutoField(primary_key=True)
+    order = models.ForeignKey(
+        Order,
+        on_delete=models.CASCADE,
+        db_column="order_id",
+        related_name="deleted_items"
+    )
+    product_name = models.CharField(max_length=100)  # название блюда
+    quantity = models.IntegerField(default=1)
+    reason = models.CharField(max_length=255, null=True, blank=True)  # причина удаления
+    cashier = models.ForeignKey(
+        Employee,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        db_column="cashier_id",
+        related_name="deleted_items"
+    )
+    deleted_at = models.DateTimeField(default=timezone.now)
+
+    class Meta:
+        db_table = "deleted_items"
+
+    def __str__(self):
+        return f"{self.product_name} x{self.quantity} — удалено кассиром {self.cashier.name if self.cashier else '-'}"
 

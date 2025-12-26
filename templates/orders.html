@@ -12,124 +12,53 @@
       background: #f0f2f5;
     }
     .topbar {
-      background: #1f1f1f;
-      color: white;
-      padding: 12px 24px;
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
+      background: #1f1f1f; color: white; padding: 12px 24px;
+      display: flex; justify-content: space-between; align-items: center;
       box-shadow: 0 2px 4px rgba(0,0,0,0.2);
     }
-    .topbar .brand {
-      font-size: 22px;
-      font-weight: bold;
+    .topbar .brand { font-size: 22px; font-weight: bold; }
+    .topbar .nav a { color: white; margin-left: 24px; font-weight: bold; text-decoration: none; }
+    .topbar .nav a:hover { color: #ffc107; }
+
+    .container { padding: 20px; max-width: 100%; margin: auto; }
+    h2 { margin-bottom: 20px; font-size: 24px; color: #333; }
+
+    .order-grid {
+      display: grid;
+      grid-template-columns: repeat(8, 1fr);
+      gap: 10px;
     }
-    .topbar .nav a {
+    .order-cell {
+      border-radius: 12px;
+      padding: 10px;
+      text-align: center;
       color: white;
-      margin-left: 24px;
-      font-weight: bold;
-      text-decoration: none;
-      transition: color 0.2s ease;
-    }
-    .topbar .nav a:hover {
-      color: #ffc107;
-    }
-    .container {
-      padding: 30px;
-      max-width: 900px;
-      margin: auto;
-    }
-    h2 {
-      margin-bottom: 20px;
-      font-size: 24px;
-      color: #333;
-    }
-    .order-card {
-      background: white;
-      border-radius: 10px;
-      padding: 20px;
-      margin-bottom: 20px;
-      box-shadow: 0 4px 8px rgba(0,0,0,0.1);
-      transition: transform 0.2s ease;
-    }
-    .order-card:hover {
-      transform: scale(1.01);
-    }
-    .order-header {
+      height: 160px;
       display: flex;
+      flex-direction: column;
       justify-content: space-between;
-      align-items: center;
-      margin-bottom: 10px;
+      user-select: none;
     }
-    .order-header h3 {
-      margin: 0;
-      font-size: 20px;
-      color: #444;
-    }
-    .order-items {
-      margin: 10px 0;
-      padding-left: 0;
-      list-style: none;
-      color: #555;
-    }
-    .order-items li {
-      margin-bottom: 6px;
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-    }
+    .order-cell.empty  { background: #6c757d; }
+    .order-cell.active { background: #28a745; }
+    .order-cell.problem{ background: #dc3545; }
 
-    .btn-problem {
-      width: 32px;
-      height: 32px;
-      background: #ffc107;
-      border: none;
-      font-size: 20px;
-      font-weight: bold;
-      border-radius: 6px;
-      cursor: pointer;
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      padding: 0;
-      transition: background 0.2s ease;
+    .order-label { font-size: 20px; font-weight: bold; }
+    .order-name  { font-size: 14px; margin: 6px 0; }
+    .cell-actions {
+      display: flex; justify-content: center; gap: 4px; flex-wrap: wrap;
     }
-    .btn-problem:hover {
-      background: #e0a800;
+    .cell-actions button {
+      background: #ffc107; border: none; border-radius: 6px;
+      padding: 4px 6px; font-size: 14px; cursor: pointer; color: black;
     }
+    .order-cell button:hover { background: #e0a800; }
+    .cell-actions button {
+  font-size: 24px;
+  padding: 12px 18px;
+  border-radius: 10px;
+}
 
-    .btn-cancel {
-      background: #dc3545;
-      color: white;
-      border: none;
-      padding: 8px 16px;
-      border-radius: 6px;
-      font-size: 14px;
-      cursor: pointer;
-      transition: background 0.2s ease;
-    }
-    .btn-cancel:hover {
-      background: #c82333;
-    }
-
-    .btn-ready {
-      background: #28a745;
-      color: white;
-      border: none;
-      padding: 8px 16px;
-      border-radius: 6px;
-      font-size: 14px;
-      cursor: pointer;
-      transition: background 0.2s ease;
-    }
-    .btn-ready:hover {
-      background: #218838;
-    }
-
-    .order-card.problem {
-      background-color: #f8d7da !important;
-      border: 1px solid #dc3545;
-    }
   </style>
 
   <script>
@@ -137,81 +66,80 @@
       const resp = await fetch(`/orders/${orderId}/ready/`);
       const data = await resp.json();
       if (data.ok) {
-        const el = document.getElementById('order-' + orderId);
-        if (el) el.remove();
-      } else {
-        alert('Ошибка при смене статуса');
-      }
+        const cell = document.querySelector(`.order-cell[data-order-id="${orderId}"]`);
+        if (cell) setCellEmpty(cell);
+      } else alert('Ошибка при смене статуса');
     }
 
     async function cancelOrder(orderId) {
       const resp = await fetch(`/orders/${orderId}/cancel/`);
       const data = await resp.json();
       if (data.ok) {
-        const el = document.getElementById('order-' + orderId);
-        if (el) el.remove();
         alert('Заказ отменён');
-      } else {
-        alert('Ошибка при отмене заказа');
-      }
+        const cell = document.querySelector(`.order-cell[data-order-id="${orderId}"]`);
+        if (cell) setCellEmpty(cell);
+      } else alert('Ошибка при отмене заказа');
     }
 
-  async function cancelItem(itemId) {
-    const resp = await fetch(`/order-items/${itemId}/cancel/`);
-    const data = await resp.json();
-    if (!data.ok) {
-      alert('Ошибка при отмене блюда');
-      return;
+    function reprintReceipt(orderId) {
+      fetch(`/orders/${orderId}/receipt/reprint/`)
+        .then(r => r.json())
+        .then(data => { if (data.ok) alert("Чек повторно напечатан"); });
     }
 
-    const btn = document.querySelector(`button[onclick="cancelItem(${itemId})"]`);
-    if (btn) {
-      btn.outerHTML = "❌ Отменено";
+    function callOrder(orderId) {
+      fetch(`/orders/${orderId}/call/`)
+        .then(r => r.json())
+        .then(data => { if (data.ok) console.log("Сообщение воспроизведено для заказа " + data.order_id); });
     }
 
-    const orderBlock = btn ? btn.closest('.order-card') : null;
-    if (!orderBlock) return;
-
-    // Если сервер сказал, что заказ отменён — удаляем сразу
-    if (data.order_cancelled) {
-      orderBlock.remove();
-      return;
-    }
-
-    // Fallback: если кнопок отмены больше не осталось — тоже удаляем
-    const stillActive = orderBlock.querySelectorAll('button[onclick^="cancelItem"]').length;
-    if (stillActive === 0) {
-      orderBlock.remove();
-    }
-  }
-
-
-
-    async function toggleProblem(button, orderId) {
+    async function toggleProblem(_, orderId) {
       const resp = await fetch(`/orders/${orderId}/toggle-paid/`);
       const data = await resp.json();
-      if (data.ok) {
-        const orderBlock = button.closest('.order-card');
-        if (orderBlock) {
-          if (!data.is_paid) {
-            orderBlock.classList.add('problem');
-          } else {
-            orderBlock.classList.remove('problem');
-          }
-        }
-      } else {
+      if (!data.ok) {
         alert('Ошибка при изменении статуса оплаты');
+        return;
+      }
+      const cell = document.querySelector(`.order-cell[data-order-id="${orderId}"]`);
+      if (cell) {
+        cell.classList.remove('active', 'problem', 'empty');
+        cell.classList.add(data.is_paid ? 'active' : 'problem');
       }
     }
 
-function reprintReceipt(orderId) {
-    fetch(`/orders/${orderId}/receipt/reprint/`, { method: 'GET' })
-      .then(r => r.json())
-      .then(data => {
-          if (data.ok) alert("Чек повторно напечатан");
-      });
-}
+    function setCellEmpty(cell) {
+      cell.dataset.orderId = '';
+      cell.className = 'order-cell empty';
+      cell.querySelector('.order-name').textContent = 'Пустой';
+      cell.querySelector('.cell-actions').innerHTML = '';
+    }
 
+    function setCellOrder(cell, order) {
+      cell.dataset.orderId = order.id;
+      cell.className = 'order-cell ' + (order.is_paid ? 'active' : 'problem');
+      cell.querySelector('.order-name').textContent = order.client_name || ('Заказ №' + order.id);
+      const actions = cell.querySelector('.cell-actions');
+cell.onclick = () => window.location.href = `/orders/${order.id}/edit/`;
+cell.style.cursor = 'pointer';
+
+      actions.innerHTML = '';
+      const buttons = [
+  {
+    text: '❓',
+    click: (e) => {
+      e.stopPropagation();
+      toggleProblem(null, order.id);
+    }
+  }
+];
+
+      buttons.forEach(b => {
+        const btn = document.createElement('button');
+        btn.textContent = b.text;
+        btn.onclick = b.click;
+        actions.appendChild(btn);
+      });
+    }
   </script>
 </head>
 <body>
@@ -226,40 +154,36 @@ function reprintReceipt(orderId) {
 
   <div class="container">
     <h2>Заказы — Готовятся</h2>
-    {% for order in orders %}
-      {% if order.status == 'pending' and not order.cancelled %}
-        <div class="order-card {% if not order.is_paid %}problem{% endif %}" id="order-{{ order.id }}">
-          <div class="order-header">
-            <h3>Заказ №{{ order.id }} — {{ order.total }} сом</h3>
-            <a href="{% url 'edit_order' order.id %}" class="btn btn-edit">Редактировать</a>
-            <div style="display:flex; align-items:center; gap:10px;">
-              <button onclick="toggleProblem(this, {{ order.id }})"
-                      class="btn-problem"
-                      title="Отметить как неоплаченный">?</button>
-              <button onclick="reprintReceipt(91)">Повторно напечатать чек</button>
-              <button class="btn-cancel" onclick="cancelOrder({{ order.id }})">Отменить</button>
-              <button class="btn-ready" onclick="markReady({{ order.id }})">Готово</button>
-            </div>
-          </div>
-          <ul class="order-items">
-            {% for item in order.items.all %}
-              <li>
-                <span>{{ item.product.name }} × {{ item.quantity }}</span>
-                {% if not item.cancelled %}
-                  <button onclick="cancelItem({{ item.id }})"
-                          style="background:none; border:none; color:#dc3545; font-size:32px; cursor:pointer;"
-                          title="Отменить">×</button>
-                {% else %}
-                  <span style="color:#dc3545; font-size:18px;">❌ Отменено</span>
-                {% endif %}
-              </li>
-            {% endfor %}
-          </ul>
+
+    <div id="orderGrid" class="order-grid">
+      {% for i in "1234567890123456789012345678901234567890" %}
+        <div class="order-cell empty" data-slot-index="{{ forloop.counter }}">
+          <div class="order-label">№{{ forloop.counter }}</div>
+          <div class="order-name">Пустой</div>
+          <div class="cell-actions"></div>
         </div>
-      {% endif %}
-    {% empty %}
-      <p style="color:#666;">Нет заказов в статусе «Готовится»</p>
-    {% endfor %}
+      {% endfor %}
+    </div>
+
+    <script>
+      const ordersData = [
+        {% for order in orders %}
+        {
+          id: {{ order.id }},
+          total: {{ order.total }},
+          is_paid: {{ order.is_paid|yesno:"true,false" }},
+          client_name: "{{ order.client_name|default_if_none:''|escapejs }}"
+        }{% if not forloop.last %},{% endif %}
+        {% endfor %}
+      ];
+      (function fillGrid() {
+        const cells = Array.from(document.querySelectorAll('.order-cell'));
+        const count = Math.min(cells.length, ordersData.length);
+        for (let i = 0; i < count; i++) {
+          setCellOrder(cells[i], ordersData[i]);
+        }
+      })();
+    </script>
   </div>
 </body>
 </html>
