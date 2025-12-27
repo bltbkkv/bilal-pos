@@ -1,0 +1,37 @@
+# ===== CORE =====
+Django==3.2.25
+asgiref==3.6.0
+sqlparse==0.4.4
+pytz==2024.1
+
+# ===== CONFIG =====
+django-environ==0.11.2
+python-decouple==3.8
+
+# ===== DATABASE =====
+PyMySQL==1.1.0
+
+# ===== FORMS / UI =====
+django-crispy-forms==1.14.0
+
+# ===== PRINT / POS =====
+python-escpos==3.1
+pyserial==3.5
+python-barcode==0.15.1
+qrcode==7.4.2
+
+# ===== SOUND / VOICE (OFFLINE) =====
+pygame==2.1.2        # стабильная версия для Python 3.8 и Windows 7
+playsound==1.2.2
+pyttsx3==2.90
+vosk-tts==0.3.61
+
+# ===== FILES / PDF =====
+Pillow==9.5.0
+reportlab==3.6.13
+pdfkit==1.0.0
+
+# ===== WINDOWS =====
+pywin32==306
+pypiwin32==223
+colorama==0.4.6

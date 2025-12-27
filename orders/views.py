@@ -1,40 +1,20 @@
-from django.shortcuts import render, get_object_or_404
-from django.http import JsonResponse, FileResponse, HttpResponseBadRequest
+from django.shortcuts import render
+from django.http import  HttpResponseBadRequest
 from django.views.decorators.http import require_POST
 from django.views.decorators.csrf import csrf_exempt
-from decimal import Decimal
 from django.utils import timezone
-from django.db import models
-from django.db.models import Sum
-import io, json
-# Добавь импорт наверх файла
-from django.db.models.functions import Coalesce
-from django.db.models import Value
-
-from .sound import generate_voice
-import win32print
 import win32ui
 from django.views.decorators.http import require_GET
-from reportlab.lib.pagesizes import A4
-from reportlab.pdfgen import canvas
-from .models import Supply
-from reportlab.pdfbase import pdfmetrics
-from reportlab.pdfbase.ttfonts import TTFont
-from reportlab.pdfbase import pdfmetrics
-import os
-from reportlab.lib.units import mm
+from django.http import JsonResponse
+from django.shortcuts import get_object_or_404
 
 import json
 from decimal import Decimal
 
 from .models import Product, Order, OrderItem, Employee
-from django.shortcuts import redirect
 from django.db.models import Sum, F, ExpressionWrapper, DecimalField
-from datetime import datetime, time
-from django.http import HttpResponse
-from django.template.loader import render_to_string
+from datetime import datetime
 from django.contrib.auth import login
-from django.conf import settings
 from .sound import generate_voice
 
 
@@ -109,8 +89,6 @@ def mark_order_ready(request, order_id):
 def print_receipt_view(request, order_id):
     order = get_object_or_404(Order, id=order_id)
 
-    import win32print
-    import win32ui
 
     PRINTER_CASH = "XP-80C (copy 1)"   # кассовый принтер
     PRINTER_KITCHEN = "XP-80C (copy 1)"  # кухонный (можно указать другой, если есть)
@@ -384,8 +362,7 @@ def logout(request):
 from django.shortcuts import redirect
 
 def report_receipt(request):
-    from .models import Order, OrderItem
-    import win32print, win32ui
+
 
     PRINTER_NAME = "XP-80C (copy 1)"  # твой принтер
 
@@ -625,6 +602,7 @@ def remove_item_from_order(request, item_id):
 
     items, total = _recalc_and_serialize(order)
     return JsonResponse({'ok': True, 'items': items, 'total': total})
+
 @csrf_exempt
 @require_POST
 def recalc_order_total(request, order_id):
@@ -633,62 +611,109 @@ def recalc_order_total(request, order_id):
     return JsonResponse({'ok': True, 'items': items, 'total': total})
 
 def print_receipt_direct(order):
-    import win32print
     import win32ui
 
-    PRINTER_NAME = "XP-80C (copy 1)"
+    PRINTER_CLIENT = "XP-80C (copy 1)"
+    PRINTER_KITCHEN = "XP-80C (copy 1)"
 
-    def _print_on_printer(printer_name, items_filter=None):
-        hPrinter = win32print.OpenPrinter(printer_name)
-        pdc = win32ui.CreateDC()
-        pdc.CreatePrinterDC(printer_name)
+    # 🔹 Мини-шрифт, но жирный и читаемый
+    font_normal = win32ui.CreateFont({
+        "name": "Arial",
+        "height": 22,   # компактный
+        "weight": 400
+    })
+    font_bold = win32ui.CreateFont({
+        "name": "Arial",
+        "height": 35,   # чуть крупнее для выделения
+        "weight": 700
+    })
 
-        font_height = 24
-        line_spacing = font_height + 6
-        margin_left = 10
+    line_spacing = 30
+    margin_left = 30
 
-        lines = [
-            "Bilal Fried Chicken POS",
-            f"Заказ №{order.id}",
-            f"Кассир: {order.employee.name if order.employee else '-'}",
-            f"Дата: {order.order_time.strftime('%d.%m.%Y %H:%M')}",
-            "---------------------------"
-        ]
-
-        items = order.items.filter(cancelled=False)
-        if items_filter:
-            items = items.exclude(product__category__iexact=items_filter)  # 🔹 безопаснее по регистру
-
-        for item in items:
-            line = f"{item.product.name} x{item.quantity} = {item.price * item.quantity:.2f} сом"
-            if len(line) > 40:
-                line = line[:37] + "..."
-            lines.append(line)
-
-        lines.append("---------------------------")
-        total = sum(i.price * i.quantity for i in items)
-        lines.append(f"ИТОГО: {total:.2f} сом")
-        lines.append("Спасибо за покупку!")
-
-        pdc.StartDoc(f"Чек заказа №{order.id}")
-        pdc.StartPage()
-        font = win32ui.CreateFont({
-            "name": "Arial",
-            "height": font_height,
-            "weight": 600
-        })
-        pdc.SelectObject(font)
-
+    def write_lines(pdc, lines, bold_indexes=None):
         y = margin_left
-        for line in lines:
+        pdc.StartPage()
+        for idx, line in enumerate(lines):
+            pdc.SelectObject(font_bold if bold_indexes and idx in bold_indexes else font_normal)
             pdc.TextOut(margin_left, y, line)
             y += line_spacing
-
         pdc.EndPage()
+
+    # 🔹 Клиентский чек
+    try:
+        pdc = win32ui.CreateDC()
+        pdc.CreatePrinterDC(PRINTER_CLIENT)
+        pdc.StartDoc(f"Клиентский чек №{order.receipt_number}")
+
+        lines = [
+            f"ЗАКАЗ №{order.receipt_number}",
+            f"Оператор — {order.employee.name if order.employee else '-'}",
+            f"Дата: {order.order_time.strftime('%Y.%m.%d')}",
+            f"Время: {order.order_time.strftime('%H:%M')}",
+            "Fred Chicken",
+            "ИНН/КПП: 050891662",
+            "---------------------------",
+            "Наименование | Кол-во | Цена | Сумма"
+        ]
+        bold_indexes = [0, 7]  # заказ и заголовок таблицы
+
+        total = 0
+        for item in order.items.filter(cancelled=False):
+            name = item.product.name
+            qty = item.quantity
+            price = item.price or item.product.price
+            line_total = price * qty
+            total += line_total
+            line = f"{name} | {qty} | {price:.0f} | {line_total:.0f}"
+            lines.append(line)
+            bold_indexes.append(len(lines)-1)
+
+        lines.append(f"С собой" if order.order_type == "takeaway" else "Здесь | 1 | 0 | 0")
+        lines.append("---------------------------")
+        lines.append(f"Сумма: {total:.0f}")
+        lines.append("Способ оплаты: Наличные")
+        if order.note:
+            lines.append(f"Комментарий: {order.note}")
+        lines.append("Спасибо за покупку!")
+
+        bold_indexes += [len(lines)-5, len(lines)-1]  # сумма и финал
+
+        write_lines(pdc, lines, bold_indexes)
         pdc.EndDoc()
         pdc.DeleteDC()
+    except Exception as e:
+        print(f"Ошибка печати клиентского чека: {e}")
 
-    # 🔹 Печатаем полный чек на первом принтере
+    # 🔹 Кухонный чек
+    try:
+        pdc = win32ui.CreateDC()
+        pdc.CreatePrinterDC(PRINTER_KITCHEN)
+        pdc.StartDoc(f"Кухонный чек №{order.receipt_number}")
+
+        lines = [
+            f"ЗАКАЗ №{order.receipt_number}",
+            f"Оператор — {order.employee.name if order.employee else '-'}",
+            order.order_time.strftime('%d.%m.%Y %H:%M'),
+            "---------------------------"
+        ]
+        bold_indexes = [0]
+
+        for item in order.items.filter(cancelled=False):
+            lines.append(f"{item.product.name} x{item.quantity}")
+            bold_indexes.append(len(lines)-1)
+
+        lines.append("---------------------------")
+        lines.append("С собой" if order.order_type == "takeaway" else "Здесь")
+
+        write_lines(pdc, lines, bold_indexes)
+        pdc.EndDoc()
+        pdc.DeleteDC()
+    except Exception as e:
+        print(f"Ошибка печати кухонного чека: {e}")
+
+
+
 
 
 
@@ -703,12 +728,87 @@ def print_receipt_view(request, order_id):
 
 
 
-
 @require_GET
 def reprint_receipt_view(request, order_id):
     order = get_object_or_404(Order, id=order_id)
-    print_receipt_direct(order)  # 🔹 просто печатаем чек
+
+    # 🔹 проверяем, что пользователь авторизован и есть связанный Employee
+    if not request.user.is_authenticated or not hasattr(request.user, "employee"):
+        return JsonResponse({'error': 'Нет прав'}, status=403)
+
+    role = (request.user.employee.role or "").lower()
+
+    try:
+        if role == "кассир":
+            # кассир может перепечатать только клиентский чек
+            try:
+                # вызываем только клиентскую часть из print_receipt_direct
+                import win32ui
+                PRINTER_CLIENT = "XP-80C (copy 1)"
+                pdc = win32ui.CreateDC()
+                pdc.CreatePrinterDC(PRINTER_CLIENT)
+                pdc.StartDoc(f"Клиентский чек №{order.receipt_number}")
+
+                lines = [
+                    "Bilal Fried Chicken POS",
+                    f"ЗАКАЗ №{order.receipt_number}",
+                    f"Оператор — {order.employee.name if order.employee else '-'}",
+                    f"Дата: {order.order_time.strftime('%Y.%m.%d')}",
+                    f"Время: {order.order_time.strftime('%H:%M')}",
+                    "Единый фискальный чек",
+                    "ИНН: 666300819662",
+                    "---------------------------",
+                    "Наименование | Кол-во | Цена | Сумма"
+                ]
+
+                total = 0
+                for item in order.items.filter(cancelled=False):
+                    name = item.product.name
+                    qty = item.quantity
+                    price = item.price or item.product.price
+                    line_total = price * qty
+                    total += line_total
+                    lines.append(f"{name} | {qty} | {price:.0f} | {line_total:.0f}")
+
+                lines.append("---------------------------")
+                lines.append(f"Сумма: {total:.0f}")
+                lines.append("Способ оплаты: Наличные")
+                if order.note:
+                    lines.append(f"Комментарий: {order.note}")
+                lines.append("Спасибо за покупку!")
+
+                # печать строк
+                font_height = 24
+                line_spacing = font_height + 6
+                margin_left = 10
+                pdc.StartPage()
+                font = win32ui.CreateFont({
+                    "name": "Arial",
+                    "height": font_height,
+                    "weight": 600
+                })
+                pdc.SelectObject(font)
+                y = margin_left
+                for line in lines:
+                    pdc.TextOut(margin_left, y, line)
+                    y += line_spacing
+                pdc.EndPage()
+                pdc.EndDoc()
+                pdc.DeleteDC()
+            except Exception as e:
+                return JsonResponse({'error': f'Ошибка печати клиентского чека: {e}'}, status=500)
+
+        elif role == "админ":
+            # админ может перепечатать оба чека
+            print_receipt_direct(order)
+        else:
+            return JsonResponse({'error': 'Нет прав'}, status=403)
+
+    except Exception as e:
+        return JsonResponse({'error': f'Ошибка печати: {e}'}, status=500)
+
     return JsonResponse({'ok': True, 'reprinted': True})
+
 
 
 
@@ -761,8 +861,6 @@ def create_order_view(request):
         )
 
     return JsonResponse({"ok": True, "order_id": order.id, "status": order.status})
-
-
 
 
 
