@@ -38,6 +38,6 @@ path("orders/<int:order_id>/toggle-paid/", views.toggle_paid, name="toggle_paid"
     path('orders/<int:order_id>/recalc/', views.recalc_order_total, name='recalc_order_total'),
 path('orders/<int:order_id>/receipt/reprint/', views.reprint_receipt_view, name='reprint_receipt'),
 path('orders/<int:order_id>/call/', views.call_order, name='call_order'),
-
+path('order-items/<int:item_id>/reduce/', views.reduce_order_item_quantity, name='reduce_order_item_quantity')
 
 ]

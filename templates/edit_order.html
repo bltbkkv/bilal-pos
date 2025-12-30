@@ -17,12 +17,29 @@
     .btn-green { background: #28a745; color: white; }
     .btn-danger { background: #dc3545; color: white; }
     .btn-primary { background: #007bff; color: white; }
+    .btn-small { padding: 8px 12px; font-size: 16px; }
     .total { font-weight: bold; font-size: 22px; margin-top: 12px; }
     .tabs { display: flex; gap: 12px; margin-bottom: 12px; flex-wrap: wrap; }
     .tab-btn { background: #eee; border: none; padding: 16px 24px; border-radius: 10px; cursor: pointer; font-size: 18px; }
     .tab-btn:hover { background: #ddd; }
     .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 12px; }
     .product-card { border: 2px solid #ddd; border-radius: 12px; padding: 16px; display: flex; justify-content: space-between; align-items: center; background: #fafafa; font-size: 18px; }
+    .notify {
+  position: fixed;
+  bottom: 20px;
+  right: 20px;
+  background: #28a745;
+  color: white;
+  padding: 12px 20px;
+  border-radius: 8px;
+  font-size: 16px;
+  opacity: 0;
+  transition: opacity 0.3s ease;
+  z-index: 9999;
+}
+.notify.show { opacity: 1; }
+.notify.error { background: #dc3545; }
+
   </style>
 </head>
 <body>
@@ -30,26 +47,26 @@
     <div class="brand">Mediar fried chiken</div>
     <div class="nav">
       <a href="/menu/">Меню</a>
-
     </div>
-
     <div class="actions" style="margin-top: 20px; display: flex; gap: 12px; flex-wrap: wrap;">
-  <button class="btn btn-primary" onclick="reprintReceipt({{ order.id }})">🖨️ Чек</button>
-  <button class="btn btn-primary" onclick="callOrder({{ order.id }})">📢 Вызов</button>
-  <button class="btn btn-danger" onclick="cancelOrder({{ order.id }})">❌ Отменить</button>
-  <button class="btn btn-green" onclick="markReady({{ order.id }})">✅ Готово</button>
-</div>
-
+      <button class="btn btn-primary" onclick="reprintReceipt({{ order.id }})">🖨️ Чек</button>
+      <button class="btn btn-primary" onclick="callOrder({{ order.id }})">📢 Вызов</button>
+      <button class="btn btn-danger" onclick="cancelOrder({{ order.id }})">❌ Отменить</button>
+      <button class="btn btn-green" onclick="markReady({{ order.id }})">✅ Готово</button>
+    </div>
   </header>
 
   <div class="wrap">
     <div class="panel">
-      <h3>Заказ №{{ order.id }}</h3>
+      <h3>Заказ №{{ order.receipt_number }}</h3>
       <div id="order-items">
         {% for it in items %}
           <div class="item-row">
             <div>{{ it.product.name }} × {{ it.quantity }} — {{ it.line_total }} сом</div>
-            <button class="btn btn-danger" onclick="removeItem({{ it.id }})">Удалить</button>
+            <div style="display:flex; gap:8px;">
+              <button class="btn btn-small btn-primary" onclick="decreaseItemQuantity({{ it.id }}, {{ it.quantity }})">−</button>
+              <button class="btn btn-small btn-danger" onclick="removeItem({{ it.id }})">Удалить</button>
+            </div>
           </div>
         {% endfor %}
       </div>
@@ -81,8 +98,26 @@
       {% endfor %}
     </div>
   </div>
+<div id="notify" class="notify"></div>
 
   <script>
+    // CSRF токен из cookie
+    function getCookie(name) {
+      let cookieValue = null;
+      if (document.cookie && document.cookie !== '') {
+        const cookies = document.cookie.split(';');
+        for (let i = 0; i < cookies.length; i++) {
+          const cookie = cookies[i].trim();
+          if (cookie.substring(0, name.length + 1) === (name + '=')) {
+            cookieValue = decodeURIComponent(cookie.substring(name.length + 1));
+            break;
+          }
+        }
+      }
+      return cookieValue;
+    }
+    const csrftoken = getCookie('csrftoken');
+
     function showTab(cat) {
       document.querySelectorAll('.tab-content').forEach(el => el.style.display = 'none');
       document.getElementById('tab-' + cat).style.display = 'block';
@@ -96,7 +131,10 @@
     async function addItem(orderId, productId) {
       const resp = await fetch(`/orders/${orderId}/add-item/`, {
         method: 'POST',
-        headers: {'Content-Type':'application/json'},
+        headers: {
+          'Content-Type':'application/json',
+          'X-CSRFToken': csrftoken
+        },
         body: JSON.stringify({product_id: productId, qty: 1})
       });
       const data = await resp.json();
@@ -105,14 +143,35 @@
     }
 
     async function removeItem(itemId) {
-      const resp = await fetch(`/order-items/${itemId}/remove/`, { method: 'POST' });
+      const resp = await fetch(`/order-items/${itemId}/remove/`, {
+        method: 'POST',
+        headers: {'X-CSRFToken': csrftoken}
+      });
       const data = await resp.json();
       if (!data.ok) { alert(data.error || 'Ошибка удаления'); return; }
       redrawItems(data.items, data.total);
     }
 
+    async function decreaseItemQuantity(itemId, currentQty) {
+      const newQty = currentQty - 1;
+      const resp = await fetch(`/order-items/${itemId}/reduce/`, {
+        method: 'POST',
+        headers: {
+          'Content-Type':'application/x-www-form-urlencoded',
+          'X-CSRFToken': csrftoken
+        },
+        body: `quantity=${newQty}`
+      });
+      const data = await resp.json();
+      if (!data.ok) { alert(data.error || 'Ошибка уменьшения'); return; }
+      redrawItems(data.items, data.total);
+    }
+
     async function recalc(orderId) {
-      const resp = await fetch(`/orders/${orderId}/recalc/`, { method: 'POST' });
+      const resp = await fetch(`/orders/${orderId}/recalc/`, {
+        method: 'POST',
+        headers: {'X-CSRFToken': csrftoken}
+      });
       const data = await resp.json();
       if (!data.ok) {
         alert('Ошибка пересчёта');
@@ -130,37 +189,60 @@
         row.className = 'item-row';
         row.innerHTML = `
           <div>${it.name} × ${it.quantity} — ${it.line_total} сом</div>
-          <button class="btn btn-danger" onclick="removeItem(${it.id})">Удалить</button>
+          <div style="display:flex; gap:8px;">
+            <button class="btn btn-small btn-primary" onclick="decreaseItemQuantity(${it.id}, ${it.quantity})">−</button>
+            <button class="btn btn-small btn-danger" onclick="removeItem(${it.id})">Удалить</button>
+          </div>
         `;
         list.appendChild(row);
       });
       document.getElementById('order-total').innerText = total + ' сом';
     }
 
-    async function markReady(orderId) {
-  const resp = await fetch(`/orders/${orderId}/ready/`);
-  const data = await resp.json();
-  if (data.ok) window.location.href = "/orders/";
-  else alert("Ошибка при завершении заказа");
-}
 
-async function cancelOrder(orderId) {
-  const resp = await fetch(`/orders/${orderId}/cancel/`);
-  const data = await resp.json();
-  if (data.ok) window.location.href = "/orders/";
-  else alert("Ошибка при отмене заказа");
-}
+  async function markReady(orderId) {
+    const resp = await fetch(`/orders/${orderId}/ready/`, {
+      method: 'POST',
+      headers: { 'X-CSRFToken': csrftoken }
+    });
+    const data = await resp.json();
+    if (data.ok) window.location.href = "/orders/";
+    else alert("Ошибка при завершении заказа");
+  }
 
-function reprintReceipt(orderId) {
+
+
+    async function cancelOrder(orderId) {
+      const resp = await fetch(`/orders/${orderId}/cancel/`);
+      const data = await resp.json();
+      if (data.ok) window.location.href = "/orders/";
+      else alert("Ошибка при отмене заказа");
+    }
+
+    function reprintReceipt(orderId) {
   fetch(`/orders/${orderId}/receipt/reprint/`)
     .then(r => r.json())
-    .then(data => { if (data.ok) alert("Чек повторно напечатан"); });
+    .then(data => {
+      if (data.ok) notify("🖨️ Чек повторно напечатан!");
+      else notify("Ошибка при печати чека", "error");
+    });
 }
 
-function callOrder(orderId) {
-  fetch(`/orders/${orderId}/call/`)
-    .then(r => r.json())
-    .then(data => { if (data.ok) console.log("Вызов выполнен"); });
+
+
+    function callOrder(orderId) {
+      fetch(`/orders/${orderId}/call/`)
+        .then(r => r.json())
+        .then(data => { if (data.ok) console.log("Вызов выполнен"); });
+    }
+    function notify(msg, type="success") {
+  const box = document.getElementById('notify');
+  if (!box) return;
+  box.textContent = msg;
+  box.className = "notify " + (type === "error" ? "error show" : "show");
+  setTimeout(() => {
+    box.className = "notify"; // скрыть через 2 сек
+  }, 2000);
 }
 
   </script>

@@ -7,232 +7,186 @@
   <link rel="stylesheet" href="{% static 'style.css' %}">
   <script defer src="{% static 'js/cart.js' %}"></script>
 
-  <style>
-    body {
-      margin: 0;
-      font-family: 'Segoe UI', sans-serif;
-      background: #1e1e1e;
-      color: #f0f0f0;
-      font-size: 18px;
-      overflow: hidden; /* без вертикальной прокрутки страницы */
-    }
-    .layout {
-      display: flex;
-      flex-direction: column;
-      height: 100vh;
-    }
-    .topbar {
-      background: #222;
-      color: white;
-      padding: 14px 20px;
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      font-size: 20px;
-    }
-    .content {
-      display: flex;
-      flex: 1;
-      overflow: hidden; /* ограничиваем прокрутку внутри основных колонок */
-    }
-    .left {
-      flex: 1;
-      padding: 10px;
-      display: flex;
-      flex-direction: column;
-      overflow: hidden;
-    }
+ <style>
+body {
+  margin: 0;
+  font-family: 'Segoe UI', sans-serif;
+  background: #1e1e1e;
+  color: #f0f0f0;
+  font-size: 16px;
+  width: 1024px;
+  height: 768px;
+  overflow: hidden;
+}
+.layout {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+.topbar {
+  height: 60px;
+  background: #222;
+  color: white;
+  padding: 10px 16px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.content {
+  display: flex;
+  height: calc(100% - 60px);
+}
+.left {
+  flex: 1;
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+}
+.categories {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+.cat-btn {
+  padding: 10px 14px;
+  font-size: 16px;
+  background: #444;
+  color: white;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.grid {
+  flex: 1;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); /* уменьшено */
+  gap: 6px;
+  padding-right: 6px; /* чтобы скролл не перекрывал */
+}
+.item {
+  background: #2c2c2c;
+  border-radius: 6px;
+  padding: 4px;
+  text-align: center;
+  height: 140px; /* уменьшено */
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  cursor: pointer;
+}
+.item img {
+  width: 100%;
+  height: 60px; /* уменьшено */
+  object-fit: cover;
+  border-radius: 4px;
+}
+.item-name { font-size: 13px; margin-top: 4px; }
+.item-price { font-size: 14px; font-weight: bold; color: #ffc107; margin-top: 2px; }
 
-    /* Категории — в одну строку, прокрутка по горизонтали */
-    .categories {
-      display: flex;
-      overflow-x: auto;
-      gap: 10px;
-      padding-bottom: 10px;
-    }
-    .categories::-webkit-scrollbar { height: 6px; }
-    .categories::-webkit-scrollbar-thumb { background: #555; border-radius: 3px; }
-    .cat-btn {
-      flex: 0 0 auto;
-      padding: 18px;
-      font-size: 20px;
-      background: #444;
-      color: white;
-      border: none;
-      border-radius: 8px;
-      cursor: pointer;
-      user-select: none;
-    }
-    .cat-btn:hover { background: #ffc107; color: black; }
+/* Корзина */
+.cart-panel {
+  width: 300px;
+  background: #2a2a2a;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+.cart-inner {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  padding: 10px;
+  overflow-y: auto;
+}
+.cart-panel h2 { font-size: 18px; margin-bottom: 6px; }
+#cart-items {
+  flex: 1;
+  overflow-y: auto;
+  border: 1px solid #444;
+  border-radius: 6px;
+  background: #1f1f1f;
+  margin-bottom: 8px;
+}
+#cart-items li {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 6px;
+  font-size: 14px;
+}
+.cart-total { font-size: 16px; margin: 6px 0; }
+.cash-box input {
+  font-size: 16px;
+  padding: 8px;
+  border-radius: 4px;
+  width: 100%;
+}
+.cart-actions {
+  display: flex;
+  gap: 6px;
+  margin-top: 8px;
+}
+.cart-actions button {
+  flex: 1;
+  padding: 10px;
+  font-size: 16px;
+  border-radius: 6px;
+  border: none;
+  cursor: pointer;
+}
+#btn-checkout { background: #28a745; color: white; }
+#btn-clear { background: #ff4d4d; color: white; }
+.product-scroll {
+  flex: 1;
+  overflow-y: auto;
+  max-height: calc(768px - 60px - 90px); /* высота экрана минус topbar и категории */
+}
+   .modal {
+  position: fixed;
+  top: 0; left: 0;
+  width: 100%; height: 100%;
+  background: rgba(0,0,0,0.6);
+  display: none; /* по умолчанию скрыто */
+  justify-content: center;
+  align-items: center;
+  z-index: 9999;
+}
 
-    /* Сетка товаров — одинаковые карточки */
-    .grid {
-      flex: 1;
-      display: grid;
-      grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
-      gap: 10px;
-      overflow-y: auto; /* если товаров много, скролл только здесь */
-      max-height: calc(100vh - 240px); /* учитываем верхнюю панель и блок категорий */
-    }
-    .item {
-      background: #2c2c2c;
-      border-radius: 8px;
-      padding: 8px;
-      text-align: center;
-      height: 200px;
-      display: flex;
-      flex-direction: column;
-      justify-content: space-between;
-      cursor: pointer;
-      user-select: none;
-    }
-    .item img {
-      width: 100%;
-      height: 100px;
-      object-fit: cover;
-      border-radius: 6px;
-    }
-    .item-name { font-size: 18px; margin-top: 8px; }
-    .item-price { font-size: 20px; font-weight: bold; color: #ffc107; margin-top: 4px; }
-    .item:active { transform: scale(0.98); outline: 2px solid #ffc107; }
+.modal-content {
+  background: #2c2c2c;
+  padding: 20px;
+  border-radius: 8px;
+  text-align: center;
+  width: 300px;
+  color: white;
+}
 
-    /* Корзина справа — фиксированная высота и внутренняя прокрутка */
-    .cart-panel {
-      width: 340px;
-      background: #2a2a2a;
-      padding: 16px;
-      display: flex;
-      flex-direction: column;
-      max-height: calc(100vh - 60px); /* 60px примерно высота топбара */
-      overflow: hidden;
-    }
-    .cart-panel h2 { font-size: 22px; margin-bottom: 10px; }
+.modal-content h2 {
+  margin-bottom: 12px;
+}
 
-    #cart-items {
-      list-style: none;
-      padding: 0;
-      margin: 0;
-      flex: 1;
-      overflow-y: auto;
-      border: 1px solid #444;
-      border-radius: 8px;
-      background: #1f1f1f;
-    }
-    #cart-items li {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      padding: 10px 12px;
-      border-bottom: 1px solid #3a3a3a;
-      font-size: 18px;
-    }
-    #cart-items li:last-child { border-bottom: none; }
-    .cart-item-name { flex: 1; margin-right: 8px; }
-    .cart-item-qty { display: inline-flex; gap: 8px; align-items: center; }
-    .qty-btn {
-      width: 34px;
-      height: 34px;
-      border: none;
-      border-radius: 6px;
-      background: #444;
-      color: white;
-      font-size: 20px;
-      cursor: pointer;
-      user-select: none;
-    }
-    .qty-btn:active { transform: scale(0.96); background: #555; }
-    .remove-btn {
-      margin-left: 8px;
-      background: #ff4d4d;
-      color: white;
-      border: none;
-      border-radius: 6px;
-      padding: 8px 10px;
-      cursor: pointer;
-      font-size: 16px;
-    }
+.modal-content input {
+  width: 90%;
+  padding: 10px;
+  margin-top: 10px;
+  font-size: 16px;
+  border-radius: 6px;
+  border: none;
+}
 
-    .cart-total { font-size: 20px; margin: 10px 0; }
+.modal-content button {
+  margin-top: 12px;
+  padding: 10px 16px;
+  font-size: 16px;
+  background: #28a745;
+  color: white;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+}
 
-    /* Калькулятор сдачи — крупные элементы */
-    .cash-box label { font-size: 18px; }
-    .cash-box input {
-      width: 100%;
-      padding: 14px;
-      font-size: 20px;
-      margin-top: 6px;
-      border-radius: 6px;
-      border: 2px solid #555;
-      background: #1a1a1a;
-      color: #f0f0f0;
-    }
-    .change { margin-top: 10px; font-size: 20px; }
-    .change .positive { color: #28a745; }
-    .change .negative { color: #ff4d4d; }
+</style>
 
-    /* Комментарий к заказу */
-    textarea#order-note {
-      width: 100%;
-      padding: 12px;
-      font-size: 18px;
-      margin-top: 10px;
-      border-radius: 6px;
-      border: 2px solid #555;
-      background: #1a1a1a;
-      color: #f0f0f0;
-      resize: none;
-    }
-
-    /* Кнопки оформления */
-    .cart-actions {
-      display: flex;
-      gap: 10px;
-      margin-top: 12px;
-    }
-    .cart-actions button {
-      flex: 1;
-      padding: 18px;
-      font-size: 20px;
-      border: none;
-      border-radius: 8px;
-      cursor: pointer;
-      user-select: none;
-    }
-    #btn-checkout { background: #28a745; color: white; }
-    #btn-clear { background: #ff4d4d; color: white; }
-
-    /* PIN модалка — оставлена, но стилизована для удобства */
-    .modal {
-      position: fixed; inset: 0;
-      background: rgba(0,0,0,0.6);
-      display: flex; justify-content: center; align-items: center;
-      z-index: 9999;
-    }
-    .modal[aria-hidden="true"] { display: none; }
-    .modal-content {
-      background: #fff; padding: 20px; border-radius: 8px;
-      text-align: center; width: 340px;
-    }
-    .modal-content input {
-      width: 80%;
-      padding: 14px;
-      font-size: 20px;
-      margin-top: 10px;
-      border-radius: 6px;
-      border: 2px solid #555;
-    }
-    .modal-content button {
-      width: 100%;
-      padding: 16px;
-      font-size: 20px;
-      margin-top: 12px;
-      border: none;
-      border-radius:8px;
-      background: #28a745;
-      color: white;
-      cursor: pointer;
-    }
-  </style>
 </head>
 
 <body>
@@ -274,43 +228,48 @@
         {% endfor %}
       </div>
 
-      <div class="grid" id="product-grid">
-        {% for p in products %}
-        <div class="item"
-             data-category="{{ p.category }}"
-             data-id="{{ p.id }}"
-             data-name="{{ p.name }}"
-             data-price="{{ p.price }}">
-          <img src="{% if p.image %}{{ p.image.url }}{% else %}{% static 'images/placeholder.jpg' %}{% endif %}"
-               alt="{{ p.name }}">
-          <div class="item-name">{{ p.name }}</div>
-          <div class="item-price">{{ p.price }} сом</div>
+      <div class="product-scroll">
+        <div class="grid" id="product-grid">
+          {% for p in products %}
+          <div class="item"
+               data-category="{{ p.category }}"
+               data-id="{{ p.id }}"
+               data-name="{{ p.name }}"
+               data-price="{{ p.price }}">
+            <img src="{% if p.image %}{{ p.image.url }}{% else %}{% static 'images/placeholder.jpg' %}{% endif %}"
+                 alt="{{ p.name }}">
+            <div class="item-name">{{ p.name }}</div>
+            <div class="item-price">{{ p.price }} сом</div>
+          </div>
+          {% endfor %}
         </div>
-        {% endfor %}
       </div>
     </section>
 
     <aside class="cart-panel">
-      <h2>Корзина</h2>
-      <ul id="cart-items"></ul>
+      <div class="cart-inner">
+        <h2>Корзина</h2>
+        <ul id="cart-items"></ul>
 
-      <div class="cart-total">Итого: <span id="cart-total">0</span> сом</div>
+        <div class="cart-total">Итого: <span id="cart-total">0</span> сом</div>
 
-      <div class="cash-box">
-        <label for="cashGiven">Получено от клиента:</label>
-        <input type="number" id="cashGiven" placeholder="Введите сумму" />
-        <div class="change">Сдача: <span id="changeAmount">0</span> сом</div>
-      </div>
+        <div class="cash-box">
+          <label for="cashGiven">Получено от клиента:</label>
+          <input type="number" id="cashGiven" placeholder="Введите сумму" />
+          <div class="change">Сдача: <span id="changeAmount">0</span> сом</div>
+        </div>
 
-      <textarea id="order-note" placeholder="Комментарий к заказу" rows="2"></textarea>
+        <textarea id="order-note" placeholder="Комментарий к заказу" rows="2"></textarea>
 
-      <div class="cart-actions">
-        <button id="btn-checkout">Оформить заказ</button>
-        <button id="btn-clear">Очистить</button>
+        <div class="cart-actions">
+          <button id="btn-checkout">Оформить заказ</button>
+          <button id="btn-clear">Очистить</button>
+        </div>
       </div>
     </aside>
   </main>
 </div>
+<div id="notify" class="notify"></div>
 
 <script>
   window.EMPLOYEE_ID = {% if employee and employee.id %}{{ employee.id }}{% else %}null{% endif %};

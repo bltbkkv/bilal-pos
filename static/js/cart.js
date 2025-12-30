@@ -2,6 +2,17 @@ let cart = [];
 
 const fmt = v => Number(v).toFixed(2);
 
+// 🔔 Функция уведомлений
+function notify(msg, type="success") {
+  const box = document.getElementById('notify');
+  if (!box) return;
+  box.textContent = msg;
+  box.className = "notify " + (type === "error" ? "error show" : "show");
+  setTimeout(() => {
+    box.className = "notify"; // скрыть через 2 сек
+  }, 2000);
+}
+
 function renderCart() {
   const list = document.getElementById('cart-items');
   const totalNode = document.getElementById('cart-total');
@@ -32,17 +43,12 @@ async function toggleProblem(button, orderId) {
   if (data.ok) {
     const orderBlock = button.closest('.order-card');
     if (orderBlock) {
-      if (!data.is_paid) {
-        orderBlock.classList.add('problem');
-      } else {
-        orderBlock.classList.remove('problem');
-      }
+      orderBlock.classList.toggle('problem', !data.is_paid);
     }
   } else {
-    alert('Ошибка при изменении статуса оплаты');
+    notify('Ошибка при изменении статуса оплаты', "error");
   }
 }
-
 
 function addToCart(id, name, price) {
   const existing = cart.find(i => i.id === id);
@@ -63,14 +69,24 @@ function filterCategory(cat) {
 }
 
 async function checkout() {
-  if (!cart.length) return alert('Корзина пустая');
-  if (!window.EMPLOYEE_ID) return alert('Сначала войдите кассиром');
+  if (!cart.length) return notify('Корзина пустая', "error");
+  if (!window.EMPLOYEE_ID) return notify('Сначала войдите кассиром', "error");
 
   const note = document.getElementById('order-note').value || '';
+
+  // 🔥 определяем тип заказа по блюду "Доставка"
+  let orderType = "С собой"; // значение по умолчанию
+  cart.forEach(i => {
+    if (i.name.toLowerCase().includes("доставка")) {
+      orderType = "Доставка";
+    }
+  });
+
   const payload = {
     employee_id: window.EMPLOYEE_ID,
     items: cart.map(i => ({ id: i.id, name: i.name, price: i.price, qty: i.qty })),
-    note
+    note,
+    order_type: orderType   // 👈 добавляем тип заказа
   };
 
   const res = await fetch('/orders/submit/', {
@@ -79,34 +95,33 @@ async function checkout() {
     body: JSON.stringify(payload)
   });
 
-  if (!res.ok) return alert('Ошибка оформления заказа');
+  if (!res.ok) return notify('Ошибка оформления заказа', "error");
   const data = await res.json();
 
   if (data.ok) {
-    alert("✅ Заказ оформлен и чек напечатан!");
+    // ✅ используем receipt_number вместо order_number
+    notify("✅ Заказ №" + data.receipt_number + " оформлен и чек напечатан!");
     clearCart();
 
-    // ✅ Добавляем заказ в список "Готовятся" на главном экране
     const pendingList = document.getElementById('pending-orders');
     if (pendingList) {
       const li = document.createElement('li');
-      li.id = 'order-' + data.order_id;
+      li.id = 'order-' + data.receipt_number;
       li.innerHTML = `
-        <strong>Заказ №${data.order_id}</strong> — ${fmt(payload.items.reduce((s,i)=>s+i.price*i.qty,0))} сом
+        <strong>Заказ №${data.receipt_number}</strong> — ${fmt(payload.items.reduce((s,i)=>s+i.price*i.qty,0))} сом
         <ul>
           ${payload.items.map(i => `<li>${i.name} × ${i.qty}</li>`).join('')}
         </ul>
-        <button onclick="markReady(${data.order_id})">Готово</button>
+        <div><em>Тип заказа: ${orderType}</em></div>
+        <button onclick="markReady(${data.receipt_number})">Готово</button>
       `;
       pendingList.appendChild(li);
     }
   } else {
-    alert("Ошибка: " + (data.error || ""));
+    notify("Ошибка: " + (data.error || ""), "error");
   }
 }
 
-
-// Bind
 window.addEventListener('DOMContentLoaded', () => {
   document.querySelectorAll('.item').forEach(el => {
     el.addEventListener('click', () => {
@@ -120,30 +135,25 @@ window.addEventListener('DOMContentLoaded', () => {
   document.getElementById('btn-clear').addEventListener('click', clearCart);
 });
 
-// ✅ Вход по PIN с редиректом
 function submitPin() {
   const pin = document.getElementById('pinInput').value.trim();
-  if (!pin) {
-    alert("Введите PIN");
-    return;
-  }
-  fetch(`/employee/get-id/?pin=${pin}`)   // исправленный маршрут
+  if (!pin) return notify("Введите PIN", "error");
+
+  fetch(`/employee/get-id/?pin=${pin}`)
     .then(res => res.json())
     .then(data => {
       if (data.id) {
-        // Перенаправляем на меню с выбранным кассиром
         window.location.href = `/menu/?emp=${data.id}`;
       } else {
-        alert("Неверный PIN");
+        notify("Неверный PIN", "error");
       }
     })
     .catch(err => {
       console.error("Ошибка при проверке PIN:", err);
-      alert("Ошибка подключения");
+      notify("Ошибка подключения", "error");
     });
 }
 
-// Автоматическое скрытие модалки, если кассир выбран
 window.onload = function() {
   const urlParams = new URLSearchParams(window.location.search);
   const modal = document.getElementById('pinModal');
@@ -154,23 +164,23 @@ window.onload = function() {
   }
 };
 
-// ✅ Функция смены статуса заказа
-async function markReady(orderId) {
-  const resp = await fetch(`/orders/${orderId}/ready/`);
+async function markReady(orderNumber) {
+  const resp = await fetch(`/orders/${orderNumber}/ready/`);
   const data = await resp.json();
   if (data.ok) {
-    const el = document.getElementById('order-' + orderId);
+    const el = document.getElementById('order-' + orderNumber);
     if (el) el.remove();
+    notify("Заказ №" + orderNumber + " готов!");
   } else {
-    alert('Ошибка при смене статуса');
+    notify('Ошибка при смене статуса', "error");
   }
 }
+
 // === Калькулятор сдачи ===
 (function initChangeCalculator() {
   let cashInput, changeSpan, totalSpan;
 
   function getTotal() {
-    // Всегда берём чистое число из #cart-total
     const text = (totalSpan.textContent || '').replace(/[^\d.,]/g, '').replace(',', '.');
     const n = parseFloat(text);
     return isNaN(n) ? 0 : n;
@@ -182,7 +192,6 @@ async function markReady(orderId) {
     return isNaN(n) ? 0 : n;
   }
 
-  // Делаем доступной глобально — вызывается из renderCart()
   window.updateChange = function updateChange() {
     if (!cashInput || !changeSpan || !totalSpan) return;
     const total = getTotal();
@@ -198,10 +207,10 @@ async function markReady(orderId) {
 
     if (!cashInput || !changeSpan || !totalSpan) return;
 
-    // Счёт при вводе
     cashInput.addEventListener('input', window.updateChange);
-
-    // Первый рассчёт
     window.updateChange();
   });
 })();
+
+
+

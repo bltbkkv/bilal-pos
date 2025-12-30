@@ -4,61 +4,67 @@
 <head>
   <meta charset="UTF-8">
   <title>Заказы — Готовятся</title>
+  <meta name="viewport" content="width=1024, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <link rel="stylesheet" href="{% static 'style.css' %}">
   <style>
+    html, body { height: 100%; }
     body {
       margin: 0;
       font-family: 'Segoe UI', sans-serif;
       background: #f0f2f5;
     }
     .topbar {
-      background: #1f1f1f; color: white; padding: 12px 24px;
+      background: #1f1f1f; color: white; padding: 8px 16px;
       display: flex; justify-content: space-between; align-items: center;
       box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+      min-height: 44px;
     }
-    .topbar .brand { font-size: 22px; font-weight: bold; }
-    .topbar .nav a { color: white; margin-left: 24px; font-weight: bold; text-decoration: none; }
+    .topbar .brand { font-size: 20px; font-weight: bold; }
+    .topbar .nav a { color: white; margin-left: 18px; font-weight: bold; text-decoration: none; }
     .topbar .nav a:hover { color: #ffc107; }
 
-    .container { padding: 20px; max-width: 100%; margin: auto; }
-    h2 { margin-bottom: 20px; font-size: 24px; color: #333; }
+    .container { padding: 6px; max-width: 100%; margin: 0; }
+    h2 { margin: 6px 0 8px; font-size: 20px; color: #333; }
 
+    /* Сетка: 8 колонок × 5 строк, без скролла. Высота рассчитана от экрана. */
     .order-grid {
       display: grid;
       grid-template-columns: repeat(8, 1fr);
-      gap: 10px;
+      grid-auto-rows: 129px; /* фиксированная высота каждой строки */
+      gap: 2px;
+      padding: 0;
+      height: calc(100vh - 44px - 34px - 12px); /* topbar(≈44) + h2(≈34) + контейнерные отступы */
+      /* Если всё ещё не влезает, уменьши grid-auto-rows до 120px */
     }
+
     .order-cell {
-      border-radius: 12px;
-      padding: 10px;
+      border-radius: 8px;
+      padding: 4px;
       text-align: center;
       color: white;
-      height: 160px;
       display: flex;
       flex-direction: column;
       justify-content: space-between;
       user-select: none;
+      font-size: 12px;
     }
     .order-cell.empty  { background: #6c757d; }
     .order-cell.active { background: #28a745; }
     .order-cell.problem{ background: #dc3545; }
 
-    .order-label { font-size: 20px; font-weight: bold; }
-    .order-name  { font-size: 14px; margin: 6px 0; }
+    .order-label { font-size: 14px; font-weight: bold; margin-bottom: 2px; line-height: 1.2; }
+    .order-name  { font-size: 12px; margin: 2px 0; line-height: 1.2; }
+
     .cell-actions {
       display: flex; justify-content: center; gap: 4px; flex-wrap: wrap;
     }
+    /* Делает кнопку ❓ крупнее и читаемее */
     .cell-actions button {
       background: #ffc107; border: none; border-radius: 6px;
-      padding: 4px 6px; font-size: 14px; cursor: pointer; color: black;
+      padding: 8px 12px; font-size: 22px; cursor: pointer; color: black;
+      line-height: 1; min-width: 36px; min-height: 32px;
     }
     .order-cell button:hover { background: #e0a800; }
-    .cell-actions button {
-  font-size: 24px;
-  padding: 12px 18px;
-  border-radius: 10px;
-}
-
   </style>
 
   <script>
@@ -110,28 +116,32 @@
     function setCellEmpty(cell) {
       cell.dataset.orderId = '';
       cell.className = 'order-cell empty';
-      cell.querySelector('.order-name').textContent = 'Пустой';
+      cell.querySelector('.order-label').textContent = 'Пустой';
+      cell.querySelector('.order-name').textContent = '';
       cell.querySelector('.cell-actions').innerHTML = '';
+      cell.onclick = null;
+      cell.style.cursor = 'default';
     }
 
     function setCellOrder(cell, order) {
       cell.dataset.orderId = order.id;
       cell.className = 'order-cell ' + (order.is_paid ? 'active' : 'problem');
-      cell.querySelector('.order-name').textContent = order.client_name || ('Заказ №' + order.id);
+      cell.querySelector('.order-label').textContent = 'Заказ №' + order.receipt_number;
+      cell.querySelector('.order-name').textContent = order.client_name || '';
       const actions = cell.querySelector('.cell-actions');
-cell.onclick = () => window.location.href = `/orders/${order.id}/edit/`;
-cell.style.cursor = 'pointer';
+      cell.onclick = () => window.location.href = `/orders/${order.id}/edit/`;
+      cell.style.cursor = 'pointer';
 
       actions.innerHTML = '';
       const buttons = [
-  {
-    text: '❓',
-    click: (e) => {
-      e.stopPropagation();
-      toggleProblem(null, order.id);
-    }
-  }
-];
+        {
+          text: '❓',
+          click: (e) => {
+            e.stopPropagation();
+            toggleProblem(null, order.id);
+          }
+        }
+      ];
 
       buttons.forEach(b => {
         const btn = document.createElement('button');
@@ -157,8 +167,8 @@ cell.style.cursor = 'pointer';
     <div id="orderGrid" class="order-grid">
       {% for i in "1234567890123456789012345678901234567890" %}
         <div class="order-cell empty" data-slot-index="{{ forloop.counter }}">
-          <div class="order-label">№{{ forloop.counter }}</div>
-          <div class="order-name">Пустой</div>
+          <div class="order-label">Пустой</div>
+          <div class="order-name"></div>
           <div class="cell-actions"></div>
         </div>
       {% endfor %}
@@ -169,6 +179,7 @@ cell.style.cursor = 'pointer';
         {% for order in orders %}
         {
           id: {{ order.id }},
+          receipt_number: {{ order.receipt_number }},
           total: {{ order.total }},
           is_paid: {{ order.is_paid|yesno:"true,false" }},
           client_name: "{{ order.client_name|default_if_none:''|escapejs }}"
@@ -186,4 +197,3 @@ cell.style.cursor = 'pointer';
   </div>
 </body>
 </html>
-

@@ -166,7 +166,14 @@
         <input type="hidden" name="end_time" value="{{ end_time }}">
       </form>
       <button onclick="openModal()">Прибыль по товарам</button>
-      <button type="submit">Выдать чек</button>
+      <form method="get" action="{% url 'report_receipt' %}" style="display:inline;">
+        <input type="hidden" name="start" value="{{ start_date }}">
+        <input type="hidden" name="end" value="{{ end_date }}">
+        <input type="hidden" name="start_time" value="{{ start_time }}">
+        <input type="hidden" name="end_time" value="{{ end_time }}">
+        <button type="submit">Выдать чек</button>
+      </form>
+      <button type="button" onclick="document.getElementById('cancelModal').style.display='block'">Отмены</button>
     </div>
   </header>
 
@@ -182,26 +189,25 @@
         <button type="submit">Войти</button>
       {% else %}
         <div class="grid">
-  <div>
-    <label>Начало даты:</label>
-    <input type="date" id="start-date" name="start" value="{{ start_date }}">
-  </div>
-  <div>
-    <label>Конец даты:</label>
-    <input type="date" id="end-date" name="end" value="{{ end_date }}">
-  </div>
-  <div>
-    <label>Начало времени:</label>
-    <input type="time" id="start-time" name="start_time" value="{{ start_time }}">
-  </div>
-  <div>
-    <label>Конец времени:</label>
-    <input type="time" id="end-time" name="end_time" value="{{ end_time }}">
-  </div>
-</div>
-
+          <div>
+            <label>Начало даты:</label>
+            <input type="date" id="start-date" name="start" value="{{ start_date }}">
+          </div>
+          <div>
+            <label>Конец даты:</label>
+            <input type="date" id="end-date" name="end" value="{{ end_date }}">
+          </div>
+          <div>
+            <label>Начало времени:</label>
+            <input type="time" id="start-time" name="start_time" value="{{ start_time }}">
+          </div>
+          <div>
+            <label>Конец времени:</label>
+            <input type="time" id="end-time" name="end_time" value="{{ end_time }}">
+          </div>
+        </div>
         <button type="submit">Сформировать отчёт</button>
-      <button class="btn btn-secondary" onclick="setDefaultRange()">По умолчанию</button>
+        <button class="btn btn-secondary" onclick="setDefaultRange()">По умолчанию</button>
       {% endif %}
     </form>
 
@@ -239,6 +245,44 @@
     </div>
   </div>
 
+<!-- Модалка отмен — безопасный чековый вывод -->
+<div id="cancelModal" class="modal">
+  <div class="modal-content" style="font-family: monospace; line-height: 1.6;">
+    <span class="close" onclick="document.getElementById('cancelModal').style.display='none'">&times;</span>
+    <h2>Отменённые заказы и блюда</h2>
+
+    {% if cancellations_blocks %}
+      {% for block in cancellations_blocks %}
+        <div style="border:1px dashed #555; border-radius:8px; padding:12px; margin:12px 0; background:#222;">
+          <div style="color:#ffc107; font-weight:bold; margin-bottom:8px;">
+            Кассир: {{ block.cashier }}
+          </div>
+
+          {% for line in block.lines %}
+            <div style="display:grid; grid-template-columns: 1fr auto auto; gap:8px; padding:4px 0; border-bottom:1px dotted #333;">
+              <div>{{ line.title }}</div>
+              <div>
+                {% if line.amount %}
+                  {{ line.amount }} сом
+                {% else %}
+                  &nbsp;
+                {% endif %}
+              </div>
+              <div>{{ line.time|date:"d.m H:i" }}</div>
+            </div>
+          {% endfor %}
+        </div>
+      {% endfor %}
+    {% else %}
+      <p>Нет отменённых заказов или блюд</p>
+    {% endif %}
+  </div>
+</div>
+
+
+
+
+
   <script>
     function openModal() {
       document.getElementById("profitModal").style.display = "block";
@@ -246,28 +290,27 @@
     function closeModal() {
       document.getElementById("profitModal").style.display = "none";
     }
-  function setDefaultRange() {
-    const now = new Date();
-    const yyyy = now.getFullYear();
-    const mm = String(now.getMonth() + 1).padStart(2, '0');
-    const dd = String(now.getDate()).padStart(2, '0');
+    function setDefaultRange() {
+      const now = new Date();
+      const yyyy = now.getFullYear();
+      const mm = String(now.getMonth() + 1).padStart(2, '0');
+      const dd = String(now.getDate()).padStart(2, '0');
 
-    const today = `${yyyy}-${mm}-${dd}`;
+      const today = `${yyyy}-${mm}-${dd}`;
 
-    // Завтрашняя дата
-    const tomorrow = new Date(now);
-    tomorrow.setDate(now.getDate() + 1);
-    const ddNext = String(tomorrow.getDate()).padStart(2, '0');
-    const mmNext = String(tomorrow.getMonth() + 1).padStart(2, '0');
-    const yyyyNext = tomorrow.getFullYear();
-    const nextDay = `${yyyyNext}-${mmNext}-${ddNext}`;
+      const tomorrow = new Date(now);
+      tomorrow.setDate(now.getDate() + 1);
+      const ddNext = String(tomorrow.getDate()).padStart(2, '0');
+      const mmNext = String(tomorrow.getMonth() + 1).padStart(2, '0');
+      const yyyyNext = tomorrow.getFullYear();
+      const nextDay = `${yyyyNext}-${mmNext}-${ddNext}`;
 
-    document.getElementById('start-date').value = today;
-    document.getElementById('end-date').value = nextDay;
-    document.getElementById('start-time').value = '09:00';
-    document.getElementById('end-time').value = '02:00';
-  }
-</script>
+      document.getElementById('start-date').value = today;
+      document.getElementById('end-date').value = nextDay;
+      document.getElementById('start-time').value = '09:00';
+      document.getElementById('end-time').value = '02:00';
+    }
+  </script>
 
 </body>
 </html>

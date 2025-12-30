@@ -45,6 +45,7 @@ class Product(models.Model):
         return round(self.price - (self.cost_price or 0), 2)
 
 
+
 class Order(models.Model):
     STATUS_CHOICES = [
         ('pending', 'Готовится'),
@@ -70,14 +71,17 @@ class Order(models.Model):
     cancelled = models.BooleanField(default=False)
     is_paid = models.BooleanField(default=True)
     note = models.CharField(max_length=200, null=True, blank=True)
-    receipt_number = models.PositiveIntegerField(default=0)
+    cancelled_by = models.ForeignKey(Employee, null=True, blank=True, on_delete=models.SET_NULL)
+    cancelled_at = models.DateTimeField(null=True, blank=True)
+    # 🔹 исправлено: убран default=0, чтобы save() сам проставлял номер
+    receipt_number = models.PositiveIntegerField(null=True, blank=True)
     status = models.CharField(
         max_length=20,
         choices=STATUS_CHOICES,
         default='pending',
         db_column="status"
     )
-    order_type = models.CharField(  # 🔹 добавлено поле для "здесь/с собой/доставка"
+    order_type = models.CharField(
         max_length=20,
         choices=ORDER_TYPE_CHOICES,
         default='here',
@@ -88,7 +92,18 @@ class Order(models.Model):
         db_table = "orders"
 
     def __str__(self):
-        return f"Заказ #{self.id} — {self.total} сом ({self.get_status_display()})"
+        return f"Заказ #{self.receipt_number} — {self.total} сом ({self.get_status_display()})"
+
+    # 🔹 логика циклической нумерации
+    def save(self, *args, **kwargs):
+        if not self.receipt_number:  # только при создании нового заказа
+            last_order = Order.objects.order_by('-id').first()
+            if last_order and last_order.receipt_number:
+                self.receipt_number = (last_order.receipt_number % 40) + 1
+            else:
+                self.receipt_number = 1
+        super().save(*args, **kwargs)
+
 
 
 class OrderItem(models.Model):
@@ -108,6 +123,8 @@ class OrderItem(models.Model):
     quantity = models.IntegerField(null=True)
     price = models.DecimalField(max_digits=10, decimal_places=2, null=True)
     cancelled = models.BooleanField(default=False)
+    cancelled_by = models.ForeignKey(Employee, null=True, blank=True, on_delete=models.SET_NULL)
+    cancelled_at = models.DateTimeField(null=True, blank=True)  # ⏱ время отмены
     created_at = models.DateTimeField(auto_now_add=True)
     options = models.JSONField(default=list, blank=True, null=True) # 🔹 добавлено поле для модификаторов ("без овощей")
 
@@ -119,16 +136,13 @@ class OrderItem(models.Model):
         cost_price = self.product.cost_price or 0
         return (sell_price - cost_price) * (self.quantity or 0)
 
+    @property
+    def line_total(self):
+        return self.price * self.quantity
+
     class Meta:
         db_table = "order_items"
 
-    @property
-    def line_total(self):
-        return (self.quantity or 0) * (self.price or 0)
-
-    def __str__(self):
-        opts = f" ({', '.join(self.options)})" if self.options else ""
-        return f"{self.product.name}{opts} x{self.quantity} — {self.line_total} сом"
 
 class Supply(models.Model):
     INGREDIENT_CHOICES = [
