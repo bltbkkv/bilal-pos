@@ -1235,4 +1235,15 @@ def reduce_order_item_quantity(request, item_id):
 
 
 
+import subprocess
+import os
+
+def announce_order(order):
+    items = ", ".join([item.product.name for item in order.items.all()])
+    text = f"Заказ номер {order.receipt_number}. {items}"
+
+    # путь к sound.py внутри папки orders
+    script_path = os.path.join(os.path.dirname(__file__), "sound.py")
+    subprocess.Popen(["python", script_path, text])
+
 

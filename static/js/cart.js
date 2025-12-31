@@ -1,18 +1,16 @@
 let cart = [];
-
 const fmt = v => Number(v).toFixed(2);
 
-// 🔔 Функция уведомлений
-function notify(msg, type="success") {
+// 🔔 Уведомления
+function notify(msg, type = "success") {
   const box = document.getElementById('notify');
   if (!box) return;
   box.textContent = msg;
   box.className = "notify " + (type === "error" ? "error show" : "show");
-  setTimeout(() => {
-    box.className = "notify"; // скрыть через 2 сек
-  }, 2000);
+  setTimeout(() => { box.className = "notify"; }, 2000);
 }
 
+// 🛒 Отрисовка корзины
 function renderCart() {
   const list = document.getElementById('cart-items');
   const totalNode = document.getElementById('cart-total');
@@ -37,30 +35,31 @@ function renderCart() {
   totalNode.textContent = fmt(total);
 }
 
-async function toggleProblem(button, orderId) {
-  const resp = await fetch(`/orders/${orderId}/toggle-paid/`);
-  const data = await resp.json();
-  if (data.ok) {
-    const orderBlock = button.closest('.order-card');
-    if (orderBlock) {
-      orderBlock.classList.toggle('problem', !data.is_paid);
-    }
-  } else {
-    notify('Ошибка при изменении статуса оплаты', "error");
-  }
-}
-
 function addToCart(id, name, price) {
   const existing = cart.find(i => i.id === id);
   if (existing) existing.qty += 1;
   else cart.push({ id, name, price: Number(price), qty: 1 });
   renderCart();
 }
-function incQty(id) { const i = cart.find(x => x.id === id); if (i) { i.qty++; renderCart(); } }
-function decQty(id) { const i = cart.find(x => x.id === id); if (i && i.qty > 1) { i.qty--; } else { removeItem(id); } renderCart(); }
-function removeItem(id) { cart = cart.filter(i => i.id !== id); renderCart(); }
-function clearCart() { cart = []; renderCart(); }
+function incQty(id) {
+  const i = cart.find(x => x.id === id);
+  if (i) { i.qty++; renderCart(); }
+}
+function decQty(id) {
+  const i = cart.find(x => x.id === id);
+  if (i && i.qty > 1) { i.qty--; } else { removeItem(id); }
+  renderCart();
+}
+function removeItem(id) {
+  cart = cart.filter(i => i.id !== id);
+  renderCart();
+}
+function clearCart() {
+  cart = [];
+  renderCart();
+}
 
+// 🔎 Фильтр по категории
 function filterCategory(cat) {
   document.querySelectorAll('.cat-btn').forEach(b => b.classList.toggle('active', b.dataset.cat === cat));
   document.querySelectorAll('.item').forEach(el => {
@@ -68,25 +67,22 @@ function filterCategory(cat) {
   });
 }
 
+// 🧾 Оформление заказа
 async function checkout() {
   if (!cart.length) return notify('Корзина пустая', "error");
   if (!window.EMPLOYEE_ID) return notify('Сначала войдите кассиром', "error");
 
   const note = document.getElementById('order-note').value || '';
-
-  // 🔥 определяем тип заказа по блюду "Доставка"
-  let orderType = "С собой"; // значение по умолчанию
+  let orderType = "С собой";
   cart.forEach(i => {
-    if (i.name.toLowerCase().includes("доставка")) {
-      orderType = "Доставка";
-    }
+    if (i.name.toLowerCase().includes("доставка")) orderType = "Доставка";
   });
 
   const payload = {
     employee_id: window.EMPLOYEE_ID,
     items: cart.map(i => ({ id: i.id, name: i.name, price: i.price, qty: i.qty })),
     note,
-    order_type: orderType   // 👈 добавляем тип заказа
+    order_type: orderType
   };
 
   const res = await fetch('/orders/submit/', {
@@ -99,7 +95,6 @@ async function checkout() {
   const data = await res.json();
 
   if (data.ok) {
-    // ✅ используем receipt_number вместо order_number
     notify("✅ Заказ №" + data.receipt_number + " оформлен и чек напечатан!");
     clearCart();
 
@@ -109,9 +104,7 @@ async function checkout() {
       li.id = 'order-' + data.receipt_number;
       li.innerHTML = `
         <strong>Заказ №${data.receipt_number}</strong> — ${fmt(payload.items.reduce((s,i)=>s+i.price*i.qty,0))} сом
-        <ul>
-          ${payload.items.map(i => `<li>${i.name} × ${i.qty}</li>`).join('')}
-        </ul>
+        <ul>${payload.items.map(i => `<li>${i.name} × ${i.qty}</li>`).join('')}</ul>
         <div><em>Тип заказа: ${orderType}</em></div>
         <button onclick="markReady(${data.receipt_number})">Готово</button>
       `;
@@ -122,24 +115,13 @@ async function checkout() {
   }
 }
 
-window.addEventListener('DOMContentLoaded', () => {
-  document.querySelectorAll('.item').forEach(el => {
-    el.addEventListener('click', () => {
-      addToCart(el.dataset.id, el.dataset.name, el.dataset.price);
-    });
-  });
-  document.querySelectorAll('.cat-btn').forEach(el => {
-    el.addEventListener('click', () => filterCategory(el.dataset.cat));
-  });
-  document.getElementById('btn-checkout').addEventListener('click', checkout);
-  document.getElementById('btn-clear').addEventListener('click', clearCart);
-});
-
+// ✅ Вход кассира
 function submitPin() {
-  const pin = document.getElementById('pinInput').value.trim();
+  const pinInput = document.getElementById('pin-input');
+  const pin = pinInput?.value.trim();
   if (!pin) return notify("Введите PIN", "error");
 
-  fetch(`/employee/get-id/?pin=${pin}`)
+  fetch(`/employee/get-id/?pin=${encodeURIComponent(pin)}`)
     .then(res => res.json())
     .then(data => {
       if (data.id) {
@@ -154,16 +136,7 @@ function submitPin() {
     });
 }
 
-window.onload = function() {
-  const urlParams = new URLSearchParams(window.location.search);
-  const modal = document.getElementById('pinModal');
-  if (!urlParams.has('emp')) {
-    if (modal) modal.style.display = 'flex';
-  } else {
-    if (modal) modal.style.display = 'none';
-  }
-};
-
+// ✅ Отметить заказ как готов
 async function markReady(orderNumber) {
   const resp = await fetch(`/orders/${orderNumber}/ready/`);
   const data = await resp.json();
@@ -176,9 +149,11 @@ async function markReady(orderNumber) {
   }
 }
 
-// === Калькулятор сдачи ===
+// 💰 Калькулятор сдачи
 (function initChangeCalculator() {
-  let cashInput, changeSpan, totalSpan;
+  let cashInput = document.getElementById('cashGiven');
+  let changeSpan = document.getElementById('changeAmount');
+  let totalSpan = document.getElementById('cart-total');
 
   function getTotal() {
     const text = (totalSpan.textContent || '').replace(/[^\d.,]/g, '').replace(',', '.');
@@ -196,21 +171,47 @@ async function markReady(orderNumber) {
     if (!cashInput || !changeSpan || !totalSpan) return;
     const total = getTotal();
     const cash = getCash();
-    const change = Math.max(cash - total, 0);
+    const change = cash - total;
     changeSpan.textContent = change.toFixed(2);
+
+    if (change >= 0) {
+      changeSpan.classList.add('positive');
+      changeSpan.classList.remove('negative');
+    } else {
+      changeSpan.classList.add('negative');
+      changeSpan.classList.remove('positive');
+    }
   };
-
-  window.addEventListener('DOMContentLoaded', function() {
-    cashInput = document.getElementById('cashGiven');
-    changeSpan = document.getElementById('changeAmount');
-    totalSpan = document.getElementById('cart-total');
-
-    if (!cashInput || !changeSpan || !totalSpan) return;
-
-    cashInput.addEventListener('input', window.updateChange);
-    window.updateChange();
-  });
 })();
 
+// 🎯 Инициализация событий
+window.addEventListener('DOMContentLoaded', () => {
+  // Показать PIN-модалку
+  const urlParams = new URLSearchParams(window.location.search);
+  const modal = document.getElementById('pinModal');
+  if (modal) modal.style.display = urlParams.has('emp') ? 'none' : 'flex';
+
+  // События корзины
+  document.querySelectorAll('.item').forEach(el => {
+    el.addEventListener('click', () => {
+      addToCart(el.dataset.id, el.dataset.name, el.dataset.price);
+    });
+  });
+  document.querySelectorAll('.cat-btn').forEach(el => {
+    el.addEventListener('click', () => filterCategory(el.dataset.cat));
+  });
+  document.getElementById('btn-checkout').addEventListener('click', checkout);
+  document.getElementById('btn-clear').addEventListener('click', clearCart);
+
+  // Автообновление сдачи при изменении суммы
+  const cashInput = document.getElementById('cashGiven');
+  const cartTotal = document.getElementById('cart-total');
+  if (cashInput) cashInput.addEventListener('input', updateChange);
+  if (cartTotal) {
+    const observer = new MutationObserver(updateChange);
+    observer.observe(cartTotal, { childList: true });
+  }
+  updateChange();
+});
 
 

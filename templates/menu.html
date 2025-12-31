@@ -7,7 +7,7 @@
   <link rel="stylesheet" href="{% static 'style.css' %}">
   <script defer src="{% static 'js/cart.js' %}"></script>
 
- <style>
+<style>
 body {
   margin: 0;
   font-family: 'Segoe UI', sans-serif;
@@ -18,6 +18,8 @@ body {
   height: 768px;
   overflow: hidden;
 }
+
+/* Основная структура */
 .layout {
   display: flex;
   flex-direction: column;
@@ -56,19 +58,21 @@ body {
   border-radius: 6px;
   cursor: pointer;
 }
+
+/* Сетка товаров */
 .grid {
   flex: 1;
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); /* уменьшено */
+  grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
   gap: 6px;
-  padding-right: 6px; /* чтобы скролл не перекрывал */
+  padding-right: 6px;
 }
 .item {
   background: #2c2c2c;
   border-radius: 6px;
   padding: 4px;
   text-align: center;
-  height: 140px; /* уменьшено */
+  height: 140px;
   display: flex;
   flex-direction: column;
   justify-content: space-between;
@@ -76,12 +80,20 @@ body {
 }
 .item img {
   width: 100%;
-  height: 60px; /* уменьшено */
+  height: 60px;
   object-fit: cover;
   border-radius: 4px;
 }
-.item-name { font-size: 13px; margin-top: 4px; }
-.item-price { font-size: 14px; font-weight: bold; color: #ffc107; margin-top: 2px; }
+.item-name {
+  font-size: 13px;
+  margin-top: 4px;
+}
+.item-price {
+  font-size: 14px;
+  font-weight: bold;
+  color: #ffc107;
+  margin-top: 2px;
+}
 
 /* Корзина */
 .cart-panel {
@@ -98,7 +110,10 @@ body {
   padding: 10px;
   overflow-y: auto;
 }
-.cart-panel h2 { font-size: 18px; margin-bottom: 6px; }
+.cart-panel h2 {
+  font-size: 18px;
+  margin-bottom: 6px;
+}
 #cart-items {
   flex: 1;
   overflow-y: auto;
@@ -114,7 +129,10 @@ body {
   padding: 6px;
   font-size: 14px;
 }
-.cart-total { font-size: 16px; margin: 6px 0; }
+.cart-total {
+  font-size: 16px;
+  margin: 6px 0;
+}
 .cash-box input {
   font-size: 16px;
   padding: 8px;
@@ -134,37 +152,45 @@ body {
   border: none;
   cursor: pointer;
 }
-#btn-checkout { background: #28a745; color: white; }
-#btn-clear { background: #ff4d4d; color: white; }
+#btn-checkout {
+  background: #28a745;
+  color: white;
+}
+#btn-clear {
+  background: #ff4d4d;
+  color: white;
+}
 .product-scroll {
   flex: 1;
   overflow-y: auto;
-  max-height: calc(768px - 60px - 90px); /* высота экрана минус topbar и категории */
-}
-   .modal {
-  position: fixed;
-  top: 0; left: 0;
-  width: 100%; height: 100%;
-  background: rgba(0,0,0,0.6);
-  display: none; /* по умолчанию скрыто */
-  justify-content: center;
-  align-items: center;
-  z-index: 9999;
+  max-height: calc(768px - 60px - 90px);
 }
 
+/* Модальные окна */
+.modal {
+  position: fixed;
+  top: 0; left: 0;
+  width: 100vw;
+  height: 100vh;
+  background: rgba(0,0,0,0.6);
+  display: none;
+  justify-content: center;
+  align-items: center;
+  z-index: 100000; /* всегда поверх */
+}
 .modal-content {
   background: #2c2c2c;
   padding: 20px;
   border-radius: 8px;
   text-align: center;
   width: 300px;
+  max-width: 90%;
+  box-sizing: border-box;
   color: white;
 }
-
 .modal-content h2 {
   margin-bottom: 12px;
 }
-
 .modal-content input {
   width: 90%;
   padding: 10px;
@@ -173,7 +199,6 @@ body {
   border-radius: 6px;
   border: none;
 }
-
 .modal-content button {
   margin-top: 12px;
   padding: 10px 16px;
@@ -185,22 +210,53 @@ body {
   cursor: pointer;
 }
 
+/* Клавиатура */
+#keyboard-modal .modal-content {
+  background: #111;
+  width: 320px;
+}
+#keyboard-modal input {
+  width: 100%;
+  font-size: 28px;
+  padding: 10px;
+  margin-bottom: 15px;
+  text-align: center;
+  border: none;
+  border-radius: 8px;
+  background: #222;
+  color: #fff;
+}
+.keyboard {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 10px;
+}
+.keyboard button {
+  font-size: 24px;
+  padding: 20px;
+  background: #333;
+  color: #fff;
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+.keyboard button:hover {
+  background: #555;
+}
+.keyboard button.ok {
+  grid-column: span 3;
+  background: #0a0;
+  font-weight: bold;
+}
 </style>
+
+
 
 </head>
 
 <body>
 
-{% if not employee %}
-<div id="pinModal" class="modal" aria-hidden="false">
-  <div class="modal-content">
-    <h2>Введите PIN кассира</h2>
-    <input type="password" id="pinInput" placeholder="PIN" autocomplete="off" />
-    <button id="pinSubmit">Войти</button>
-    <p id="pinError" style="color:red; display:none; margin-top:8px;">Неверный PIN</p>
-  </div>
-</div>
-{% endif %}
 
 <div class="layout">
   <header class="topbar">
@@ -255,8 +311,8 @@ body {
 
         <div class="cash-box">
           <label for="cashGiven">Получено от клиента:</label>
-          <input type="number" id="cashGiven" placeholder="Введите сумму" />
-          <div class="change">Сдача: <span id="changeAmount">0</span> сом</div>
+<input id="cashGiven" type="text" readonly placeholder="Введите сумму" onclick="openKeyboard('amount')" />
+<div class="change">Сдача: <span id="changeAmount">0</span> сом</div>
         </div>
 
         <textarea id="order-note" placeholder="Комментарий к заказу" rows="2"></textarea>
@@ -414,7 +470,201 @@ document.addEventListener('DOMContentLoaded', function() {
   }
 });
 
+let currentTarget = null;
+
+// Открытие экранной клавиатуры
+function openKeyboard(target) {
+  currentTarget = target;
+  const modal = document.getElementById("keyboard-modal");
+  const display = document.getElementById("keyboard-display");
+  if (!modal || !display) return;
+
+  modal.style.display = "flex";
+  display.value = "";
+  display.setAttribute("type", target === "pin" ? "password" : "text");
+}
+
+// Ввод цифры
+function pressKey(val) {
+  const display = document.getElementById("keyboard-display");
+  if (display) display.value += val;
+}
+
+// Очистка
+function clearInput() {
+  const display = document.getElementById("keyboard-display");
+  if (display) display.value = "";
+}
+
+// Удаление последнего символа
+function backspace() {
+  const display = document.getElementById("keyboard-display");
+  if (display) display.value = display.value.slice(0, -1);
+}
+
+// Проверка PIN, суммы и секретной комбинации
+function submitKeyboard() {
+  const val = document.getElementById("keyboard-display").value;
+
+  if (currentTarget === "pin") {
+    const pinInput = document.getElementById("pin-input");
+    if (pinInput) pinInput.value = val;
+
+    if (!val) return notify("Введите PIN", "error");
+
+    // 🔒 Проверка секретной комбинации
+    if (val === "0909") {
+      // Отправляем запрос на сервер для выключения
+      fetch("/shutdown/", { method: "POST" })
+        .then(() => {
+          notify("Система закрывается...", "success");
+        })
+        .catch(err => {
+          console.error("Ошибка при завершении:", err);
+          notify("Ошибка завершения", "error");
+        });
+      return;
+    }
+
+    // Обычная проверка PIN
+    fetch(`/employee/get-id/?pin=${encodeURIComponent(val)}`)
+      .then(res => res.json())
+      .then(data => {
+        if (data.id) {
+          window.location.href = `/menu/?emp=${data.id}`;
+        } else {
+          notify("Неверный PIN", "error");
+        }
+      })
+      .catch(err => {
+        console.error("Ошибка при проверке PIN:", err);
+        notify("Ошибка подключения", "error");
+      });
+  } else if (currentTarget === "amount") {
+    const cashInput = document.getElementById("cashGiven");
+    if (cashInput) {
+      cashInput.value = val;
+      updateChange(); // пересчитать сдачу
+    }
+  }
+
+  document.getElementById("keyboard-modal").style.display = "none";
+}
+
+// Уведомления
+function notify(msg, type = "success") {
+  const box = document.getElementById('notify');
+  if (!box) return;
+  box.textContent = msg;
+  box.className = "notify " + (type === "error" ? "error show" : "show");
+  setTimeout(() => { box.className = "notify"; }, 2000);
+}
+
+// Пересчёт сдачи
+function updateChange() {
+  const cashInput = document.getElementById('cashGiven');
+  const changeSpan = document.getElementById('changeAmount');
+  const totalSpan = document.getElementById('cart-total');
+
+  if (!cashInput || !changeSpan || !totalSpan) return;
+
+  const totalText = (totalSpan.textContent || '').replace(/[^\d.-]/g, '');
+  const total = parseFloat(totalText) || 0;
+  const cash = parseFloat(cashInput.value) || 0;
+  const change = cash - total;
+
+  changeSpan.textContent = change.toFixed(2);
+
+  if (change >= 0) {
+    changeSpan.classList.add('positive');
+    changeSpan.classList.remove('negative');
+  } else {
+    changeSpan.classList.add('negative');
+    changeSpan.classList.remove('positive');
+  }
+}
+
+// Очистка калькулятора
+function clearCalculator() {
+  const cashInput = document.getElementById('cashGiven');
+  const changeSpan = document.getElementById('changeAmount');
+  if (cashInput) cashInput.value = '';
+  if (changeSpan) {
+    changeSpan.textContent = '0';
+    changeSpan.classList.remove('positive', 'negative');
+  }
+}
+
+// Очистка корзины
+function clearCart() {
+  const cartItems = document.getElementById('cart-items');
+  const cartTotal = document.getElementById('cart-total');
+  if (cartItems) cartItems.innerHTML = '';
+  if (cartTotal) cartTotal.textContent = '0';
+  clearCalculator();
+}
+
+// Инициализация событий
+document.addEventListener('DOMContentLoaded', function() {
+  const btnCheckout = document.getElementById('btn-checkout');
+  const btnClear = document.getElementById('btn-clear');
+  const cashInput = document.getElementById('cashGiven');
+  const cartTotal = document.getElementById('cart-total');
+
+  if (btnCheckout) btnCheckout.addEventListener('click', clearCart);
+  if (btnClear) btnClear.addEventListener('click', clearCart);
+  if (cashInput) cashInput.addEventListener('input', updateChange);
+
+  if (cartTotal) {
+    const observer = new MutationObserver(updateChange);
+    observer.observe(cartTotal, { childList: true });
+  }
+
+  updateChange(); // первый запуск
+});
+
+// Показать PIN-модалку при загрузке
+window.addEventListener('load', () => {
+  const urlParams = new URLSearchParams(window.location.search);
+  const modal = document.getElementById('pinModal');
+  if (!urlParams.has('emp') && modal) {
+    modal.style.display = 'flex';
+  }
+});
+
+
 </script>
+{% if not employee %}
+<div id="pinModal" class="modal" aria-hidden="false">
+  <div class="modal-content">
+    <h2>Введите PIN кассира</h2>
+    <input id="pin-input" type="password" readonly placeholder="Введите PIN" onclick="openKeyboard('pin')" />
+    <p id="pinError" style="color:red; display:none; margin-top:8px;">Неверный PIN</p>
+  </div>
+</div>
+{% endif %}
+
+<div id="keyboard-modal" class="modal" style="display:none;">
+  <div class="modal-content">
+    <input id="keyboard-display" type="text" readonly />
+    <div class="keyboard">
+      <button onclick="pressKey('1')">1</button>
+      <button onclick="pressKey('2')">2</button>
+      <button onclick="pressKey('3')">3</button>
+      <button onclick="pressKey('4')">4</button>
+      <button onclick="pressKey('5')">5</button>
+      <button onclick="pressKey('6')">6</button>
+      <button onclick="pressKey('7')">7</button>
+      <button onclick="pressKey('8')">8</button>
+      <button onclick="pressKey('9')">9</button>
+      <button onclick="pressKey('0')">0</button>
+      <button onclick="clearInput()">C</button>
+      <button onclick="backspace()">←</button>
+      <button class="ok" onclick="submitKeyboard()">OK</button>
+    </div>
+  </div>
+</div>
 
 </body>
+
 </html>

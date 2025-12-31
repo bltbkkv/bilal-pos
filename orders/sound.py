@@ -8,18 +8,24 @@ def list_voices():
         print(f"{idx}: {voice.id} — {voice.name}")
 
 def generate_voice(order_id, voice_index=0):
-    """Озвучивает номер заказа приятным мужским голосом"""
-    text = f" Заказ {order_id} Подойдите на кассу."
+    """Озвучивает номер заказа приятным мужским голосом (RHVoice Aleksandr)"""
+    text = f" Заказ {order_id} готов. Просьба подойти на кассу."
 
     engine = pyttsx3.init()
-    engine.setProperty('rate', 220)     # скорость речи
+    engine.setProperty('rate', 190)     # скорость речи
     engine.setProperty('volume', 1.0)   # громкость
 
     voices = engine.getProperty('voices')
-    if voices and 0 <= voice_index < len(voices):
-        engine.setProperty('voice', voices[voice_index].id)
+    # сначала пробуем найти голос Aleksandr
+    for v in voices:
+        if "Anna" in v.id or "Anna" in v.name:
+            engine.setProperty('voice', v.id)
+            break
+    else:
+        # если не нашли, используем индекс (старое поведение)
+        if voices and 0 <= voice_index < len(voices):
+            engine.setProperty('voice', voices[voice_index].id)
 
     engine.say(text)
     engine.runAndWait()
     engine.stop()
-
