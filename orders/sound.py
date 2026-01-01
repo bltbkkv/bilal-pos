@@ -9,10 +9,10 @@ def list_voices():
 
 def generate_voice(order_id, voice_index=0):
     """Озвучивает номер заказа приятным мужским голосом (RHVoice Aleksandr)"""
-    text = f" Заказ {order_id} готов. Просьба подойти на кассу."
+    text = f" Заказ {order_id}. Готов"
 
     engine = pyttsx3.init()
-    engine.setProperty('rate', 190)     # скорость речи
+    engine.setProperty('rate', 160)     # скорость речи
     engine.setProperty('volume', 1.0)   # громкость
 
     voices = engine.getProperty('voices')

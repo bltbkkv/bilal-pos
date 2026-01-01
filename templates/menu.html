@@ -390,6 +390,7 @@ body {
 </script>
 
 <script>
+
 (function() {
   function updateChange() {
     const cashInput = document.getElementById('cashGiven');
@@ -398,16 +399,13 @@ body {
 
     if (!cashInput || !changeSpan || !totalSpan) return;
 
-    // берём только число из total, убираем всё лишнее кроме цифр, точки и минуса
     const totalText = (totalSpan.textContent || '').replace(/[^\d.-]/g, '');
     const total = parseFloat(totalText) || 0;
     const cash = parseFloat(cashInput.value) || 0;
     const change = cash - total;
 
-    // показываем как есть (может быть отрицательным)
     changeSpan.textContent = change.toFixed(2);
 
-    // цветовое оформление
     if (change >= 0) {
       changeSpan.classList.add('positive');
       changeSpan.classList.remove('negative');
@@ -429,7 +427,7 @@ body {
       observer.observe(cartTotal, { childList: true });
     }
 
-    updateChange(); // первый запуск
+    updateChange();
   });
 })();
 
@@ -457,9 +455,40 @@ document.addEventListener('DOMContentLoaded', function() {
 
   if (btnCheckout) {
     btnCheckout.addEventListener('click', function() {
-      // здесь твоя логика оформления заказа (отправка на сервер)
-      // после успешного оформления очищаем калькулятор и корзину:
-      clearCart();
+      // собираем данные корзины
+      const items = [];
+      document.querySelectorAll('#cart-items .cart-item').forEach(el => {
+        items.push({
+          id: el.dataset.id,
+          qty: el.dataset.qty,
+          price: el.dataset.price
+        });
+      });
+
+      const payload = {
+        employee_id: document.getElementById('pin-input')?.value || 1,
+        items: items,
+        note: document.getElementById('order-note')?.value || ''
+      };
+
+      fetch("/orders/submit/", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      })
+      .then(res => res.json())
+      .then(data => {
+        if (data.ok) {
+          notify("Заказ оформлен №" + data.order_number, "success");
+          clearCart();
+        } else {
+          notify("Ошибка: " + data.error, "error");
+        }
+      })
+      .catch(err => {
+        console.error("Ошибка оформления:", err);
+        notify("Ошибка подключения", "error");
+      });
     });
   }
 
@@ -472,7 +501,6 @@ document.addEventListener('DOMContentLoaded', function() {
 
 let currentTarget = null;
 
-// Открытие экранной клавиатуры
 function openKeyboard(target) {
   currentTarget = target;
   const modal = document.getElementById("keyboard-modal");
@@ -484,25 +512,21 @@ function openKeyboard(target) {
   display.setAttribute("type", target === "pin" ? "password" : "text");
 }
 
-// Ввод цифры
 function pressKey(val) {
   const display = document.getElementById("keyboard-display");
   if (display) display.value += val;
 }
 
-// Очистка
 function clearInput() {
   const display = document.getElementById("keyboard-display");
   if (display) display.value = "";
 }
 
-// Удаление последнего символа
 function backspace() {
   const display = document.getElementById("keyboard-display");
   if (display) display.value = display.value.slice(0, -1);
 }
 
-// Проверка PIN, суммы и секретной комбинации
 function submitKeyboard() {
   const val = document.getElementById("keyboard-display").value;
 
@@ -512,13 +536,9 @@ function submitKeyboard() {
 
     if (!val) return notify("Введите PIN", "error");
 
-    // 🔒 Проверка секретной комбинации
     if (val === "0909") {
-      // Отправляем запрос на сервер для выключения
       fetch("/shutdown/", { method: "POST" })
-        .then(() => {
-          notify("Система закрывается...", "success");
-        })
+        .then(() => notify("Система закрывается...", "success"))
         .catch(err => {
           console.error("Ошибка при завершении:", err);
           notify("Ошибка завершения", "error");
@@ -526,7 +546,6 @@ function submitKeyboard() {
       return;
     }
 
-    // Обычная проверка PIN
     fetch(`/employee/get-id/?pin=${encodeURIComponent(val)}`)
       .then(res => res.json())
       .then(data => {
@@ -544,14 +563,13 @@ function submitKeyboard() {
     const cashInput = document.getElementById("cashGiven");
     if (cashInput) {
       cashInput.value = val;
-      updateChange(); // пересчитать сдачу
+      updateChange();
     }
   }
 
   document.getElementById("keyboard-modal").style.display = "none";
 }
 
-// Уведомления
 function notify(msg, type = "success") {
   const box = document.getElementById('notify');
   if (!box) return;
@@ -560,70 +578,6 @@ function notify(msg, type = "success") {
   setTimeout(() => { box.className = "notify"; }, 2000);
 }
 
-// Пересчёт сдачи
-function updateChange() {
-  const cashInput = document.getElementById('cashGiven');
-  const changeSpan = document.getElementById('changeAmount');
-  const totalSpan = document.getElementById('cart-total');
-
-  if (!cashInput || !changeSpan || !totalSpan) return;
-
-  const totalText = (totalSpan.textContent || '').replace(/[^\d.-]/g, '');
-  const total = parseFloat(totalText) || 0;
-  const cash = parseFloat(cashInput.value) || 0;
-  const change = cash - total;
-
-  changeSpan.textContent = change.toFixed(2);
-
-  if (change >= 0) {
-    changeSpan.classList.add('positive');
-    changeSpan.classList.remove('negative');
-  } else {
-    changeSpan.classList.add('negative');
-    changeSpan.classList.remove('positive');
-  }
-}
-
-// Очистка калькулятора
-function clearCalculator() {
-  const cashInput = document.getElementById('cashGiven');
-  const changeSpan = document.getElementById('changeAmount');
-  if (cashInput) cashInput.value = '';
-  if (changeSpan) {
-    changeSpan.textContent = '0';
-    changeSpan.classList.remove('positive', 'negative');
-  }
-}
-
-// Очистка корзины
-function clearCart() {
-  const cartItems = document.getElementById('cart-items');
-  const cartTotal = document.getElementById('cart-total');
-  if (cartItems) cartItems.innerHTML = '';
-  if (cartTotal) cartTotal.textContent = '0';
-  clearCalculator();
-}
-
-// Инициализация событий
-document.addEventListener('DOMContentLoaded', function() {
-  const btnCheckout = document.getElementById('btn-checkout');
-  const btnClear = document.getElementById('btn-clear');
-  const cashInput = document.getElementById('cashGiven');
-  const cartTotal = document.getElementById('cart-total');
-
-  if (btnCheckout) btnCheckout.addEventListener('click', clearCart);
-  if (btnClear) btnClear.addEventListener('click', clearCart);
-  if (cashInput) cashInput.addEventListener('input', updateChange);
-
-  if (cartTotal) {
-    const observer = new MutationObserver(updateChange);
-    observer.observe(cartTotal, { childList: true });
-  }
-
-  updateChange(); // первый запуск
-});
-
-// Показать PIN-модалку при загрузке
 window.addEventListener('load', () => {
   const urlParams = new URLSearchParams(window.location.search);
   const modal = document.getElementById('pinModal');
@@ -631,6 +585,7 @@ window.addEventListener('load', () => {
     modal.style.display = 'flex';
   }
 });
+
 
 
 </script>
