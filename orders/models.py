@@ -127,6 +127,7 @@ class OrderItem(models.Model):
     cancelled_at = models.DateTimeField(null=True, blank=True)  # ⏱ время отмены
     created_at = models.DateTimeField(auto_now_add=True)
     options = models.JSONField(default=list, blank=True, null=True) # 🔹 добавлено поле для модификаторов ("без овощей")
+    is_new = models.BooleanField(default=False)
 
     def total_price(self):
         return (self.price or self.product.price) * (self.quantity or 0)

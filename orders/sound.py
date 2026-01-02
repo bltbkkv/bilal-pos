@@ -5,26 +5,23 @@ def list_voices():
     engine = pyttsx3.init()
     voices = engine.getProperty('voices')
     for idx, voice in enumerate(voices):
-        print(f"{idx}: {voice.id} — {voice.name}")
+        langs = getattr(voice, "languages", [])
+        print(f"{idx}: {voice.id} — {voice.name} — langs={langs}")
 
-def generate_voice(order_id, voice_index=0):
-    """Озвучивает номер заказа приятным мужским голосом (RHVoice Aleksandr)"""
-    text = f" Заказ {order_id}. Готов"
+
+def generate_voice(order):
+    num = order.receipt_number or order.id
+    text = f"Заказ {num}. Готов."
 
     engine = pyttsx3.init()
-    engine.setProperty('rate', 160)     # скорость речи
-    engine.setProperty('volume', 1.0)   # громкость
+    engine.setProperty('rate', 160)
+    engine.setProperty('volume', 1.0)
 
-    voices = engine.getProperty('voices')
-    # сначала пробуем найти голос Aleksandr
-    for v in voices:
-        if "Anna" in v.id or "Anna" in v.name:
-            engine.setProperty('voice', v.id)
-            break
-    else:
-        # если не нашли, используем индекс (старое поведение)
-        if voices and 0 <= voice_index < len(voices):
-            engine.setProperty('voice', voices[voice_index].id)
+    # жёстко выбираем Анну
+    engine.setProperty(
+        'voice',
+        r"HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Speech\Voices\TokenEnums\RHVoice\Anna"
+    )
 
     engine.say(text)
     engine.runAndWait()

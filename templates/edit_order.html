@@ -25,21 +25,20 @@
     .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 12px; }
     .product-card { border: 2px solid #ddd; border-radius: 12px; padding: 16px; display: flex; justify-content: space-between; align-items: center; background: #fafafa; font-size: 18px; }
     .notify {
-  position: fixed;
-  bottom: 20px;
-  right: 20px;
-  background: #28a745;
-  color: white;
-  padding: 12px 20px;
-  border-radius: 8px;
-  font-size: 16px;
-  opacity: 0;
-  transition: opacity 0.3s ease;
-  z-index: 9999;
-}
-.notify.show { opacity: 1; }
-.notify.error { background: #dc3545; }
-
+      position: fixed;
+      bottom: 20px;
+      right: 20px;
+      background: #28a745;
+      color: white;
+      padding: 12px 20px;
+      border-radius: 8px;
+      font-size: 16px;
+      opacity: 0;
+      transition: opacity 0.3s ease;
+      z-index: 9999;
+    }
+    .notify.show { opacity: 1; }
+    .notify.error { background: #dc3545; }
   </style>
 </head>
 <body>
@@ -95,7 +94,7 @@
       {% endfor %}
     </div>
   </div>
-<div id="notify" class="notify"></div>
+  <div id="notify" class="notify"></div>
 
   <script>
     // CSRF токен из cookie
@@ -164,18 +163,39 @@
       redrawItems(data.items, data.total);
     }
 
+    // Пересчитать: обновить заказ, напечатать чеки и вернуть во вкладку "Заказы"
     async function recalc(orderId) {
-      const resp = await fetch(`/orders/${orderId}/recalc/`, {
-        method: 'POST',
-        headers: {'X-CSRFToken': csrftoken}
-      });
-      const data = await resp.json();
-      if (!data.ok) {
-        alert('Ошибка пересчёта');
-        return;
+      try {
+        const resp = await fetch(`/orders/${orderId}/recalc/`, {
+          method: 'POST',
+          headers: {'X-CSRFToken': csrftoken}
+        });
+        const data = await resp.json();
+
+        if (!data.ok) {
+          notify('Ошибка пересчёта', 'error');
+          setTimeout(() => { window.location.href = "/orders/"; }, 800);
+          return;
+        }
+
+        if (data.items && data.total !== undefined) {
+          redrawItems(data.items, data.total);
+        }
+
+        if (data.recalc) {
+          notify('🖨️ Чек с изменениями напечатан!');
+        } else {
+          notify('Изменений нет');
+        }
+
+        setTimeout(() => {
+          window.location.href = "/orders/";
+        }, 900);
+
+      } catch (e) {
+        notify('Ошибка сети при пересчёте', 'error');
+        setTimeout(() => { window.location.href = "/orders/"; }, 900);
       }
-      redrawItems(data.items, data.total);
-      window.location.href = "/orders/";
     }
 
     function redrawItems(items, total) {
@@ -196,18 +216,15 @@
       document.getElementById('order-total').innerText = total + ' сом';
     }
 
-
-  async function markReady(orderId) {
-    const resp = await fetch(`/orders/${orderId}/ready/`, {
-      method: 'POST',
-      headers: { 'X-CSRFToken': csrftoken }
-    });
-    const data = await resp.json();
-    if (data.ok) window.location.href = "/orders/";
-    else alert("Ошибка при завершении заказа");
-  }
-
-
+    async function markReady(orderId) {
+      const resp = await fetch(`/orders/${orderId}/ready/`, {
+        method: 'POST',
+        headers: { 'X-CSRFToken': csrftoken }
+      });
+      const data = await resp.json();
+      if (data.ok) window.location.href = "/orders/";
+      else alert("Ошибка при завершении заказа");
+    }
 
     async function cancelOrder(orderId) {
       const resp = await fetch(`/orders/${orderId}/cancel/`);
@@ -217,31 +234,35 @@
     }
 
     function reprintReceipt(orderId) {
-  fetch(`/orders/${orderId}/receipt/reprint/`)
-    .then(r => r.json())
-    .then(data => {
-      if (data.ok) notify("🖨️ Чек повторно напечатан!");
-      else notify("Ошибка при печати чека", "error");
-    });
-}
-
-
+      fetch(`/orders/${orderId}/receipt/reprint/`)
+        .then(r => r.json())
+        .then(data => {
+          if (data.ok) notify("🖨️ Чек повторно напечатан!");
+          else notify("Ошибка при печати чека", "error");
+        })
+        .catch(() => notify("Ошибка сети при печати", "error"));
+    }
 
     function callOrder(orderId) {
       fetch(`/orders/${orderId}/call/`)
         .then(r => r.json())
-        .then(data => { if (data.ok) console.log("Вызов выполнен"); });
+        .then(data => { if (data.ok) console.log("Вызов выполнен"); })
+        .catch(() => console.log("Ошибка сети при вызове заказа"));
     }
-    function notify(msg, type="success") {
-  const box = document.getElementById('notify');
-  if (!box) return;
-  box.textContent = msg;
-  box.className = "notify " + (type === "error" ? "error show" : "show");
-  setTimeout(() => {
-    box.className = "notify"; // скрыть через 2 сек
-  }, 2000);
-}
 
+    function notify(msg, type="success") {
+      const box = document.getElementById('notify');
+      if (!box) return;
+      box.textContent = msg;
+      box.className = "notify " + (type === "error" ? "error show" : "show");
+      setTimeout(() => {
+        box.className = "notify";
+      }, 2000);
+    }
   </script>
 </body>
+
 </html>
+
+
+

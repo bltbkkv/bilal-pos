@@ -2,7 +2,7 @@
 import win32ui
 from datetime import datetime
 
-PRINTER_NAME = "XP-80C (copy 2)"
+PRINTER_NAME = "XP-80C (copy 1)"
 
 def print_receipt(order):
     """
@@ -62,15 +62,6 @@ def print_receipt(order):
     write(f"Сумма: {total} сом", bold=True)
     write("Способ оплаты: Наличные")
 
-    # 🔹 Удалённые позиции
-    if order.get('deleted_items'):
-        write("--------------------------------")
-        write("Удалённые позиции:", bold=True)
-        for d in order['deleted_items']:
-            write(f"{d['name']} x{d['quantity']} — {d['reason']}")
-            write(f"Кассир: {d['cashier']}")
-
-    write("--------------------------------")
     write("Спасибо за покупку!", bold=True)
 
     pdc.EndPage()
