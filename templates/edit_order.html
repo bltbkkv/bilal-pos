@@ -197,6 +197,17 @@
   <div id="notify" class="notify"></div>
 
   <script>
+  // Базовые количества позиций на момент открытия страницы
+  // Генерируем из контекста заказа
+  window.baselineItems = {
+    {% for it in order.items.all %}
+      "{{ it.id }}": {{ it.quantity }}{% if not forloop.last %},{% endif %}
+    {% endfor %}
+  };
+</script>
+
+
+  <script>
     // CSRF токен из cookie
     function getCookie(name) {
       let cookieValue = null;
@@ -215,22 +226,14 @@
     const csrftoken = getCookie('csrftoken');
 
     // Назад — просто переход без сохранения
-   async function goBack() {
-  const orderId = {{ order.id }};  // Django вставит ID заказа
+ async function goBack() {
+  // Django подставит ID заказа, но мы его здесь не используем
+  // const orderId = {{ order.id }};
 
-  try {
-    await fetch(`/orders/${orderId}/discard-draft/`, {
-      method: 'POST',
-      headers: {
-        'X-CSRFToken': csrftoken
-      }
-    });
-  } catch (e) {
-    console.warn("Ошибка при удалении черновиков", e);
-  }
-
+  // ⚡ Никаких запросов на discard-draft — заказ не красится
   window.location.href = "/orders/";
 }
+
 
 
     function showTab(cat) {
@@ -268,6 +271,46 @@
       redrawItems(data.items, data.total);
     }
 
+function reduceItem(itemId, newQty, orderId) {
+  fetch(`/orders/${itemId}/reduce_item_quantity/`, {
+    method: "POST",
+    headers: { "X-CSRFToken": csrftoken }, // 🔥 исправлено
+    body: new URLSearchParams({ quantity: newQty })
+  })
+  .then(res => res.json())
+  .then(data => {
+    if (data.ok) {
+      recalcOrderTotal(orderId);
+    }
+  });
+}
+
+function removeItem(itemId, orderId) {
+  fetch(`/orders/${itemId}/remove_item_from_order/`, {
+    method: "POST",
+    headers: { "X-CSRFToken": csrftoken } // 🔥 исправлено
+  })
+  .then(res => res.json())
+  .then(data => {
+    if (data.ok) {
+      recalcOrderTotal(orderId);
+    }
+  });
+}
+
+function recalcOrderTotal(orderId) {
+  fetch(`/orders/${orderId}/recalc_order_total/`, {
+    method: "POST",
+    headers: { "X-CSRFToken": csrftoken } // 🔥 исправлено
+  })
+  .then(res => res.json())
+  .then(data => {
+    if (data.ok) {
+      renderOrderItems(data.items);
+      updateTotal(data.total);
+    }
+  });
+}
     async function decreaseItemQuantity(itemId, currentQty) {
       const newQty = currentQty - 1;
       const resp = await fetch(`/order-items/${itemId}/reduce/`, {
@@ -318,23 +361,26 @@
       }
     }
 
-    function redrawItems(items, total) {
-      const list = document.getElementById('order-items');
-      list.innerHTML = '';
-      items.forEach(it => {
-        const row = document.createElement('div');
-        row.className = 'item-row';
-        row.innerHTML = `
-          <div>${it.name} × ${it.quantity} — ${it.line_total} сом</div>
-          <div style="display:flex; gap:8px;">
-            <button class="btn btn-small btn-primary" onclick="decreaseItemQuantity(${it.id}, ${it.quantity})">−</button>
-            <button class="btn btn-small btn-danger" onclick="removeItem(${it.id})">Удалить</button>
-          </div>
-        `;
-        list.appendChild(row);
-      });
-      document.getElementById('order-total').innerText = total + ' сом';
-    }
+function redrawItems(items, total) {
+  const list = document.getElementById('order-items');
+  list.innerHTML = '';
+  items.forEach(it => {
+    const row = document.createElement('div');
+    row.className = 'item-row';
+    row.setAttribute('data-item-id', it.id); // ✅ добавлен атрибут ID
+
+    row.innerHTML = `
+      <div>${it.name} × ${it.quantity} — ${it.line_total} сом</div>
+      <div style="display:flex; gap:8px;">
+        <button class="btn btn-small btn-primary" onclick="decreaseItemQuantity(${it.id}, ${it.quantity})">−</button>
+        <button class="btn btn-small btn-danger" onclick="removeItem(${it.id})">Удалить</button>
+      </div>
+    `;
+    list.appendChild(row);
+  });
+  document.getElementById('order-total').innerText = total + ' сом';
+}
+
 
     async function markReady(orderId) {
       const resp = await fetch(`/orders/${orderId}/ready/`, {
@@ -438,6 +484,135 @@
         alert("Ошибка при завершении заказа");
       }
     }
+
+const baseline = window.baselineItems || {};
+let hasChanges = false;
+
+// Помощник: текущие позиции из DOM (или из последнего ответа API)
+function readCurrentItemsFromDOM() {
+  const list = document.getElementById('order-items');
+  const rows = list ? Array.from(list.querySelectorAll('.item-row')) : [];
+  const current = {};
+  rows.forEach(row => {
+    const id = row.dataset.itemId; // обязательно: <div class="item-row" data-item-id="123">
+    if (!id) return;
+    const txt = row.firstElementChild?.textContent || '';
+    const match = txt.match(/×\s*(\d+)/);
+    const qty = match ? parseInt(match[1], 10) : 0;
+    current[id] = qty;
+  });
+  return current;
+}
+
+// Дельты относительно baseline
+function computeDiffs(current) {
+  const diffs = {};
+  const ids = new Set([...Object.keys(baseline), ...Object.keys(current)]);
+  ids.forEach(id => {
+    // строго 0 для новых позиций
+    const base = baseline.hasOwnProperty(id) ? baseline[id] : 0;
+    const cur = current[id] || 0;
+    if (base !== cur) {
+      diffs[id] = { baseline_qty: base, current_qty: cur, delta: cur - base };
+    }
+  });
+  return diffs;
+}
+
+// Обновление флага изменений после любой операции
+function flagChanged() { hasChanges = true; }
+
+// Встраиваем флаг в существующие операции
+async function addItem(orderId, productId) {
+  flagChanged();
+  const resp = await fetch(`/orders/${orderId}/add-item/`, {
+    method: 'POST',
+    headers: { 'Content-Type':'application/json', 'X-CSRFToken': csrftoken },
+    body: JSON.stringify({product_id: productId, qty: 1})
+  });
+  const data = await resp.json();
+  if (!data.ok) { alert(data.error || 'Ошибка добавления'); return; }
+  redrawItems(data.items, data.total);
+}
+
+async function removeItem(itemId) {
+  flagChanged();
+  const resp = await fetch(`/order-items/${itemId}/remove/`, {
+    method: 'POST',
+    headers: {'X-CSRFToken': csrftoken}
+  });
+  const data = await resp.json();
+  if (!data.ok) { alert(data.error || 'Ошибка удаления'); return; }
+  redrawItems(data.items, data.total);
+}
+
+async function decreaseItemQuantity(itemId, currentQty) {
+  flagChanged();
+  const newQty = currentQty - 1;
+  const resp = await fetch(`/order-items/${itemId}/reduce/`, {
+    method: 'POST',
+    headers: { 'Content-Type':'application/x-www-form-urlencoded', 'X-CSRFToken': csrftoken },
+    body: `quantity=${newQty}`
+  });
+  const data = await resp.json();
+  if (!data.ok) { alert(data.error || 'Ошибка уменьшения'); return; }
+  redrawItems(data.items, data.total);
+}
+
+// Исправленная кнопка "Назад"
+async function goBack() {
+  const orderId = {{ order.id }};
+
+  const current = readCurrentItemsFromDOM();
+  const diffs = computeDiffs(current);
+  const hasDiffs = Object.keys(diffs).length > 0;
+
+  if (hasDiffs) {
+    try {
+      await fetch(`/orders/${orderId}/discard-draft/`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-CSRFToken': csrftoken },
+        body: JSON.stringify({ diffs })
+      });
+    } catch (e) {
+      console.warn("Ошибка при откате изменений", e);
+    }
+  }
+  // В любом случае просто переход — цвет заказа не меняем на клиенте
+  window.location.href = "/orders/";
+}
+
+// Если после пересчёта ты считаешь изменения сохранёнными — сбрось флаг
+async function recalc(orderId) {
+  try {
+    const resp = await fetch(`/orders/${orderId}/recalc/`, { method: 'POST', headers: {'X-CSRFToken': csrftoken} });
+    const data = await resp.json();
+
+    if (!data.ok) {
+      notify('Ошибка пересчёта', 'error');
+      setTimeout(() => { window.location.href = "/orders/"; }, 800);
+      return;
+    }
+
+    if (data.items && data.total !== undefined) {
+      redrawItems(data.items, data.total);
+    }
+
+    if (data.recalc) {
+      notify('🖨️ Чек с изменениями напечатан!');
+    } else {
+      notify('Изменений нет');
+    }
+
+    hasChanges = false;
+
+    setTimeout(() => { window.location.href = "/orders/"; }, 900);
+  } catch (e) {
+    notify('Ошибка сети при пересчёте', 'error');
+    setTimeout(() => { window.location.href = "/orders/"; }, 900);
+  }
+}
+
 </script>
 
 </body>

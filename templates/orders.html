@@ -125,7 +125,7 @@
 
     function setCellOrder(cell, order) {
       cell.dataset.orderId = order.id;
-      cell.className = 'order-cell ' + (order.is_paid ? 'active' : 'problem');
+      cell.className = 'order-cell active';
       cell.querySelector('.order-label').textContent = 'Заказ №' + order.receipt_number;
       cell.querySelector('.order-name').textContent = order.client_name || '';
       const actions = cell.querySelector('.cell-actions');

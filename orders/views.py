@@ -5,11 +5,18 @@ from django.views.decorators.csrf import csrf_exempt
 from django.utils import timezone
 import win32ui
 from django.views.decorators.http import require_GET
+from django.db.models import Q
+from collections import defaultdict
+from decimal import Decimal
+from django.utils import timezone
+from datetime import datetime
 from django.http import JsonResponse
 from django.shortcuts import get_object_or_404
 from collections import defaultdict
 from datetime import datetime
 from decimal import Decimal
+from django.db.models import Q
+
 
 import json
 from decimal import Decimal
@@ -420,16 +427,33 @@ def report_by_date(request):
         end_dt = start_dt + timezone.timedelta(days=1)
 
         # --- отмены по диапазону ---
+    # --- отмены по диапазону ---
     cancelled_orders = Order.objects.filter(
         cancelled=True,
         cancelled_by__isnull=False,
         cancelled_at__range=(start_dt, end_dt)
     )
+
+    # полностью отменённые блюда
+
+    # полностью отменённые блюда
     cancelled_items = OrderItem.objects.filter(
         cancelled=True,
-        cancelled_by__isnull=False,
-        cancelled_at__range=(start_dt, end_dt)
+        cancelled_by__isnull=False
+    ).filter(
+        Q(cancelled_at__range=(start_dt, end_dt)) |
+        Q(cancelled_at__isnull=True, order__order_time__range=(start_dt, end_dt))
     )
+
+    # частично отменённые блюда
+    partial_cancelled_items = OrderItem.objects.filter(
+        original_quantity__gt=F('quantity'),
+        cancelled_by__isnull=False
+    ).filter(
+        Q(cancelled_at__range=(start_dt, end_dt)) |
+        Q(cancelled_at__isnull=True, order__order_time__range=(start_dt, end_dt))
+    )
+
     deleted_items = DeletedItem.objects.filter(
         cashier__isnull=False,
         deleted_at__range=(start_dt, end_dt)
@@ -507,7 +531,10 @@ def report_by_date(request):
         cancellations_blocks.append({"cashier": cashier_name, "lines": lines})
 
     # --- топ отменённых блюд ---
+    # --- топ отменённых блюд ---
     cancelled_top_raw = defaultdict(lambda: {"qty": 0, "total": Decimal("0")})
+
+    # полностью отменённые
     for it in cancelled_items:
         name = getattr(it.product, "name", "Неизвестно")
         qty = it.quantity or 0
@@ -515,11 +542,49 @@ def report_by_date(request):
         cancelled_top_raw[name]["qty"] += qty
         cancelled_top_raw[name]["total"] += price * qty
 
+    # частично отменённые
+    for it in partial_cancelled_items:
+        name = getattr(it.product, "name", "Неизвестно")
+        cancelled_qty = (it.original_quantity or 0) - (it.quantity or 0)
+        if cancelled_qty > 0:
+            price = it.price or Decimal("0")
+            cancelled_top_raw[name]["qty"] += cancelled_qty
+            cancelled_top_raw[name]["total"] += price * cancelled_qty
+
     cancelled_top = [
         {"name": name, "qty": data["qty"], "total": data["total"]}
         for name, data in cancelled_top_raw.items()
     ]
     cancelled_top.sort(key=lambda r: r["total"], reverse=True)
+
+    cancelled_items_log = []
+
+    # полностью отменённые
+    for it in cancelled_items:
+        amount = (it.price or Decimal('0')) * (it.quantity or 0)
+        cancelled_items_log.append({
+            "order_id": it.order_id,
+            "product": getattr(it.product, 'name', 'Неизвестно'),
+            "quantity": it.quantity,
+            "amount": amount,
+            "time": it.cancelled_at,
+            "operator": getattr(it.cancelled_by, 'name', '-') if it.cancelled_by else '-',
+            "status": "cancelled"
+        })
+
+    # частично отменённые
+    for it in partial_cancelled_items:
+        cancelled_qty = (it.original_quantity or 0) - (it.quantity or 0)
+        amount = (it.price or Decimal('0')) * cancelled_qty
+        cancelled_items_log.append({
+            "order_id": it.order_id,
+            "product": getattr(it.product, 'name', 'Неизвестно'),
+            "quantity": cancelled_qty,
+            "amount": amount,
+            "time": it.cancelled_at,
+            "operator": getattr(it.cancelled_by, 'name', '-') if it.cancelled_by else '-',
+            "status": "partial"
+        })
 
     return render(request, 'report_by_date.html', {
         'login_required': login_required,
@@ -529,6 +594,7 @@ def report_by_date(request):
         'end_date': end_date,
         'start_time': start_time,
         'end_time': end_time,
+        'cancelled_items_log': cancelled_items_log,
     })
 
 
@@ -800,11 +866,19 @@ def edit_order(request, order_id):
     order = get_object_or_404(Order, id=order_id)
     products = Product.objects.all().order_by('category', 'name')
     categories = Product.objects.values_list('category', flat=True).distinct()
-    items = order.items.filter(cancelled=False).select_related('product')
+
+    # Активные блюда — только те, что не отменены и количество > 0
+    active_items = order.items.filter(cancelled=False, quantity__gt=0).select_related('product')
+
+    cancelled_items = order.items.filter(
+        Q(cancelled=True) | Q(quantity=0, is_draft=True)
+    ).select_related('product')
+
     return render(request, 'edit_order.html', {
         'order': order,
-        'items': items,
+        'items': active_items,
         'products': products,
+        'cancelled_items': cancelled_items,
         'categories': categories,
     })
 
@@ -855,50 +929,95 @@ def add_item_to_order(request, order_id):
     items, total = _recalc_and_serialize(order)
     return JsonResponse({'ok': True, 'items': items, 'total': total})
 
+# views.py
+import json
+from django.http import JsonResponse
+from django.views.decorators.http import require_POST
+from django.shortcuts import get_object_or_404
+from .models import Order, OrderItem
+
 @require_POST
 def discard_draft(request, order_id):
     order = get_object_or_404(Order, id=order_id)
 
-    for item in order.items.filter(is_draft=True):
-        if item.is_new:
-            # если позиция новая — удаляем
-            item.delete()
+    try:
+        payload = json.loads(request.body or '{}')
+    except Exception:
+        payload = {}
+
+    diffs = payload.get('diffs', {})
+    changed = False
+
+    items_map = { str(it.id): it for it in OrderItem.objects.filter(order=order) }
+
+    for item_id, diff in diffs.items():
+        it = items_map.get(item_id)
+        if not it:
+            continue
+
+        if not (it.is_draft and it.is_new and not it.cancelled):
+            continue
+
+        base = int(diff.get('baseline_qty', it.quantity))
+        cur = int(diff.get('current_qty', it.quantity))
+
+        if base == cur:
+            continue
+
+        changed = True
+        if base <= 0:
+            it.delete()
         else:
-            # если позиция существующая — откатываем количество
-            item.quantity = item.original_quantity
-            item.is_draft = False
-            item.save(update_fields=["quantity", "is_draft"])
+            it.quantity = base
+            it.is_draft = False
+            it.is_new = False
+            it.save(update_fields=["quantity", "is_draft", "is_new"])
 
-    return JsonResponse({"ok": True})
+    # ⚡ всегда сбрасываем все is_draft
+    order.items.filter(is_draft=True).update(is_draft=False)
+
+    items, total = _recalc_and_serialize(order)
+    return JsonResponse({
+        'ok': True,
+        'changed': changed,
+        'items': items,
+        'total': total,
+        'action': 'discard'
+    })
 
 
-# ===== API: уменьшить количество =====
+
+
+
+
+
 @csrf_exempt
 @require_POST
 def reduce_item_quantity(request, item_id):
     item = get_object_or_404(OrderItem, id=item_id)
     new_qty = int(request.POST.get("quantity", item.quantity - 1))
 
-    # берём кассира из сессии
     emp_id = request.session.get("employee_id")
     emp = Employee.objects.filter(id=emp_id).first()
 
-    if new_qty <= 0:
-        if not item.is_draft:
-            item.original_quantity = item.quantity  # сохраняем исходное количество
-        item.quantity = 0
-        item.is_new = True
-        item.is_draft = True
-        item.cancelled_by = emp   # кто инициировал отмену
-        item.save(update_fields=["quantity", "is_new", "is_draft", "original_quantity", "cancelled_by"])
-    else:
-        if not item.is_draft:
-            item.original_quantity = item.quantity
-        item.quantity = new_qty
-        item.is_new = True
-        item.is_draft = True
-        item.cancelled_by = emp   # кто инициировал изменение
-        item.save(update_fields=["quantity", "is_new", "is_draft", "original_quantity", "cancelled_by"])
+    if not item.is_draft:
+        item.original_quantity = item.quantity
+
+    item.quantity = max(new_qty, 0)
+    item.is_new = False
+    item.is_draft = False
+
+    if item.quantity == 0:
+        # сразу фиксируем отмену
+        item.cancelled = True
+        item.cancelled_by = emp
+        item.cancelled_at = timezone.now()
+
+    item.save(update_fields=[
+        "quantity", "original_quantity",
+        "is_new", "is_draft",
+        "cancelled", "cancelled_by", "cancelled_at"
+    ])
 
     order = item.order
     order.is_paid = False
@@ -908,7 +1027,9 @@ def reduce_item_quantity(request, item_id):
     return JsonResponse({'ok': True, 'items': items, 'total': total})
 
 
-# ===== API: удалить позицию =====
+
+
+
 @csrf_exempt
 @require_POST
 def remove_item_from_order(request, item_id):
@@ -918,11 +1039,18 @@ def remove_item_from_order(request, item_id):
     item = get_object_or_404(OrderItem, id=item_id)
     if not item.is_draft:
         item.original_quantity = item.quantity
+
+    # сразу фиксируем отмену
     item.quantity = 0
-    item.is_new = True
-    item.is_draft = True
+    item.is_new = False
+    item.is_draft = False
+    item.cancelled = True
     item.cancelled_by = emp
-    item.save(update_fields=["quantity", "is_new", "is_draft", "original_quantity", "cancelled_by"])
+    item.cancelled_at = timezone.now()
+    item.save(update_fields=[
+        "quantity", "is_new", "is_draft",
+        "original_quantity", "cancelled", "cancelled_by", "cancelled_at"
+    ])
 
     order = item.order
     order.is_paid = False
@@ -932,63 +1060,62 @@ def remove_item_from_order(request, item_id):
     return JsonResponse({'ok': True, 'items': items, 'total': total})
 
 
+
 @csrf_exempt
 @require_POST
 def recalc_order_total(request, order_id):
     order = get_object_or_404(Order, id=order_id)
 
-    new_items = order.items.filter(is_new=True, cancelled=False)
-    # кандидаты на удаление — блюда с quantity=0 и is_draft=True
-    removed_candidates = order.items.filter(quantity=0, is_draft=True)
+    new_items = order.items.filter(is_new=True, is_draft=True, cancelled=False)
 
-    # Определяем тип заказа
     operator = getattr(order, "employee", None)
     operator_name = getattr(operator, "name", "-") if operator else "-"
-    order_type = ""
-    for it in order.items.filter(cancelled=False).select_related("product"):
-        product = getattr(it, "product", None)
-        if not product:
-            continue
-        cat_name = (getattr(product, "category", "") or "").strip().lower()
-        prod_name = (getattr(product, "name", "") or "").strip().lower()
-        if "доставка" in cat_name or "доставка" in prod_name:
-            order_type = "Доставка"; break
-        elif "с собой" in cat_name or "с собой" in prod_name:
-            order_type = "С собой"
-        elif "здесь" in cat_name or "здесь" in prod_name:
-            order_type = "Здесь"; break
 
-    # Если нет изменений → ничего не печатаем
-    if not new_items.exists() and not removed_candidates.exists():
+    if not new_items.exists():
         items, total = _recalc_and_serialize(order)
-        return JsonResponse({'ok': True, 'recalc': False, 'items': items, 'total': total})
+        return JsonResponse({
+            'ok': True,
+            'recalc': False,
+            'changed': False,
+            'items': items,
+            'total': total,
+            'action': 'recalc'
+        })
 
-    # Печать новых блюд
-    if new_items.exists():
-        print_to_printer("XP-80C", order.receipt_number, order.order_time, new_items,
-                         kitchen=True, order_type=order_type, operator_name=operator_name)
-        print_to_printer("XP-80C (copy 2)", order.receipt_number, order.order_time, new_items,
-                         kitchen=False, order_type=order_type, operator_name=operator_name)
-        new_items.update(is_new=False)
-
-    # Печать отменённых блюд
-    # Печать отменённых блюд
-    if removed_candidates.exists():
-        print_to_printer("XP-80C", order.receipt_number, order.order_time, removed_candidates,
-                         kitchen=True, order_type=order_type, operator_name=operator_name, cancelled=True)
-        print_to_printer("XP-80C (copy 2)", order.receipt_number, order.order_time, removed_candidates,
-                         kitchen=False, order_type=order_type, operator_name=operator_name, cancelled=True)
+    print_to_printer("XP-80C", order.receipt_number, order.order_time, new_items,
+                     kitchen=True, order_type="", operator_name=operator_name)
+    print_to_printer("XP-80C (copy 2)", order.receipt_number, order.order_time, new_items,
+                     kitchen=False, order_type="", operator_name=operator_name)
+    new_items.update(is_new=False, is_draft=False)
 
     items, total = _recalc_and_serialize(order)
+    return JsonResponse({
+        'ok': True,
+        'recalc': True,
+        'changed': True,
+        'items': items,
+        'total': total,
+        'action': 'recalc'
+    })
 
-    # Сначала сбрасываем черновики
-    order.items.filter(is_draft=True).update(is_draft=False)
 
-    # Затем окончательно помечаем удалённые позиции как отменённые
-    order.items.filter(quantity=0, is_draft=False).update(cancelled=True, cancelled_at=timezone.now())
 
-    return JsonResponse({'ok': True, 'recalc': True, 'items': items, 'total': total})
+def _recalc_and_serialize(order):
+    items = []
+    total = 0
 
+    # Берём только блюда с количеством > 0
+    for it in order.items.filter(cancelled=False, quantity__gt=0).select_related('product'):
+        line_total = it.quantity * it.price
+        total += line_total
+        items.append({
+            "id": it.id,
+            "name": it.product.name,
+            "quantity": it.quantity,
+            "line_total": line_total,
+        })
+
+    return items, total
 
 
 
@@ -1941,9 +2068,9 @@ def print_cancelled_receipt(request):
     import win32print
     import json
     from collections import defaultdict
-    from datetime import datetime
+    from datetime import datetime, time
 
-    now = timezone.now()
+    now = timezone.localtime(timezone.now())  # локальное время
 
     # Принимаем JSON или form-data
     if request.content_type == "application/json":
@@ -1965,15 +2092,25 @@ def print_cancelled_receipt(request):
             start_dt = timezone.make_aware(datetime.strptime(f"{start_date} {start_time}", "%Y-%m-%d %H:%M"))
             end_dt   = timezone.make_aware(datetime.strptime(f"{end_date} {end_time}", "%Y-%m-%d %H:%M"))
         except Exception:
-            start_dt = now.replace(hour=0, minute=0, second=0, microsecond=0)
-            end_dt   = start_dt + timezone.timedelta(days=1)
+            # fallback на дефолтный диапазон
+            today = now.date()
+            start_dt = timezone.make_aware(datetime.combine(today, time(9, 0)))
+            end_dt   = timezone.make_aware(datetime.combine(today, time(2, 0))) + timezone.timedelta(days=1)
     else:
-        start_dt = now.replace(hour=0, minute=0, second=0, microsecond=0)
-        end_dt   = start_dt + timezone.timedelta(days=1)
+        # дефолтный диапазон: 9:00 до 2:00 следующего дня
+        today = now.date()
+        start_dt = timezone.make_aware(datetime.combine(today, time(9, 0)))
+        end_dt   = timezone.make_aware(datetime.combine(today, time(2, 0))) + timezone.timedelta(days=1)
 
     # Выборка отмен
-    cancelled_orders = Order.objects.filter(status="cancelled", cancelled_at__range=(start_dt, end_dt))
-    cancelled_items  = OrderItem.objects.filter(cancelled=True, cancelled_at__range=(start_dt, end_dt))
+    cancelled_orders = Order.objects.filter(
+        cancelled=True,
+        cancelled_at__range=(start_dt, end_dt)
+    )
+    cancelled_items = OrderItem.objects.filter(
+        cancelled=True,
+        cancelled_at__range=(start_dt, end_dt)
+    )
 
     # Группировка блюд по заказу
     items_by_order = defaultdict(list)
@@ -2010,7 +2147,7 @@ def print_cancelled_receipt(request):
     draw("Отменённые заказы:")
     for order in cancelled_orders:
         cashier_name = getattr(order.cancelled_by, 'name', '-') if order.cancelled_by else '-'
-        order_time = order.cancelled_at.strftime('%Y.%m.%d %H:%M:%S') if order.cancelled_at else '-'
+        order_time = timezone.localtime(order.cancelled_at).strftime('%Y.%m.%d %H:%M:%S') if order.cancelled_at else '-'
 
         draw(f"Заказ №{order.receipt_number or order.id} — {int(order.total or 0)} сом")
         draw(f"Оператор: {cashier_name}")
@@ -2022,7 +2159,7 @@ def print_cancelled_receipt(request):
             qty = it.original_quantity or it.quantity or 0
             amount = int((it.price or 0) * qty)
             it_cashier = getattr(it.cancelled_by, 'name', '-') if it.cancelled_by else '-'
-            it_time = it.cancelled_at.strftime('%Y.%m.%d %H:%M:%S') if it.cancelled_at else '-'
+            it_time = timezone.localtime(it.cancelled_at).strftime('%Y.%m.%d %H:%M:%S') if it.cancelled_at else '-'
 
             draw(f"{it_name} x{qty} — {amount} сом")
             draw(f"Оператор: {it_cashier}")
@@ -2040,12 +2177,16 @@ def print_cancelled_receipt(request):
             qty = it.original_quantity or it.quantity or 0
             amount = int((it.price or 0) * qty)
             it_cashier = getattr(it.cancelled_by, 'name', '-') if it.cancelled_by else '-'
-            it_time = it.cancelled_at.strftime('%Y.%m.%d %H:%M:%S') if it.cancelled_at else '-'
+            it_time = timezone.localtime(it.cancelled_at).strftime('%Y.%m.%d %H:%M:%S') if it.cancelled_at else '-'
 
             draw(f"{it_name} x{qty} — {amount} сом")
             draw(f"Оператор: {it_cashier}")
             draw(f"Время отмены: {it_time}")
         draw("----------------------------------")
+
+    # Итог
+    draw(f"Всего отменённых заказов: {cancelled_orders.count()}")
+    draw(f"Всего отменённых блюд: {cancelled_items.count()}")
 
     pdc.EndPage()
     pdc.EndDoc()
