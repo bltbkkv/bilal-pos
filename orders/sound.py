@@ -11,7 +11,7 @@ def list_voices():
 
 def generate_voice(order):
     num = order.receipt_number or order.id
-    text = f"Заказ {num}. Готов."
+    text = f"Заказ {num}. Подойдите к кассе."
 
     engine = pyttsx3.init()
     engine.setProperty('rate', 160)

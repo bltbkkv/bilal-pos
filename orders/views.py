@@ -7,6 +7,9 @@ import win32ui
 from django.views.decorators.http import require_GET
 from django.http import JsonResponse
 from django.shortcuts import get_object_or_404
+from collections import defaultdict
+from datetime import datetime
+from decimal import Decimal
 
 import json
 from decimal import Decimal
@@ -68,11 +71,13 @@ def submit_order(request):
 
     print_receipt_direct(order)
 
-    # возвращаем циклический номер
-    return JsonResponse({'ok': True, 'order_number': order.receipt_number, 'status': order.status})
-
-
-
+    # возвращаем только информацию о заказе, без items
+    return JsonResponse({
+        'ok': True,
+        'order_number': order.receipt_number,
+        'status': order.status,
+        'total': str(order.total)
+    })
 
 
 def mark_order_ready(request, order_id):
@@ -397,32 +402,40 @@ def report_by_date(request):
             'cancellations_blocks': cancellations_blocks,
         })
 
-    # --- GET (по умолчанию): собираем отмены за текущий день ---
-    # Параметры для формы по умолчанию
+    # --- GET: собираем отмены по выбранному диапазону ---
+
     now = timezone.now()
-    start_date = now.date().isoformat()
-    end_date = (now + timezone.timedelta(days=1)).date().isoformat()
-    start_time = "09:00"
-    end_time = "02:00"
 
-    today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
-    today_end = today_start + timezone.timedelta(days=1)
+    # Берём параметры из формы (если не выбраны — ставим дефолт)
+    start_date = request.GET.get("start") or now.date().isoformat()
+    end_date = request.GET.get("end") or (now + timezone.timedelta(days=1)).date().isoformat()
+    start_time = request.GET.get("start_time") or "09:00"
+    end_time = request.GET.get("end_time") or "02:00"
 
+    try:
+        start_dt = timezone.make_aware(datetime.strptime(f"{start_date} {start_time}", "%Y-%m-%d %H:%M"))
+        end_dt = timezone.make_aware(datetime.strptime(f"{end_date} {end_time}", "%Y-%m-%d %H:%M"))
+    except Exception:
+        start_dt = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        end_dt = start_dt + timezone.timedelta(days=1)
+
+        # --- отмены по диапазону ---
     cancelled_orders = Order.objects.filter(
         cancelled=True,
         cancelled_by__isnull=False,
-        cancelled_at__range=(today_start, today_end)
+        cancelled_at__range=(start_dt, end_dt)
     )
     cancelled_items = OrderItem.objects.filter(
         cancelled=True,
         cancelled_by__isnull=False,
-        cancelled_at__range=(today_start, today_end)
+        cancelled_at__range=(start_dt, end_dt)
     )
     deleted_items = DeletedItem.objects.filter(
         cashier__isnull=False,
-        deleted_at__range=(today_start, today_end)
+        deleted_at__range=(start_dt, end_dt)
     )
 
+    # --- группировка по кассирам ---
     cancelled_by = defaultdict(lambda: {"orders": [], "items": [], "deleted": []})
     for o in cancelled_orders:
         cashier_name = get_cashier_name(o.cancelled_by)
@@ -434,25 +447,53 @@ def report_by_date(request):
         cashier_name = get_cashier_name(di.cashier)
         cancelled_by[cashier_name]["deleted"].append(di)
 
+    # --- формирование блоков для модалки ---
     cancellations_blocks = []
     for cashier_name in sorted(cancelled_by.keys()):
         data = cancelled_by[cashier_name]
         lines = []
+
+        # группировка блюд по заказу
+        items_by_order = defaultdict(list)
+        for it in data["items"]:
+            items_by_order[it.order_id].append(it)
+
+        # отменённые заказы + их блюда
         for o in data["orders"]:
             lines.append({
                 "kind": "order",
                 "title": f"Заказ №{o.receipt_number or o.id}",
                 "amount": o.total,
-                "time": o.cancelled_at
+                "time": o.cancelled_at,
+                "order_id": o.id,
+                "operator": getattr(o.cancelled_by, 'name', '-') if o.cancelled_by else '-'
             })
-        for it in data["items"]:
+            for it in items_by_order.get(o.id, []):
+                amount = (it.price or Decimal('0')) * (it.quantity or 0)
+                lines.append({
+                    "kind": "item",
+                    "title": f"{getattr(it.product, 'name', 'Неизвестно')} x{it.quantity}",
+                    "amount": amount,
+                    "time": it.cancelled_at,
+                    "order_id": o.id,
+                    "operator": getattr(it.cancelled_by, 'name', '-') if it.cancelled_by else '-'
+                })
+
+        # блюда без отменённого заказа
+        orphan_items = [it for it in data["items"] if it.order_id not in [o.id for o in data["orders"]]]
+        for it in orphan_items:
             amount = (it.price or Decimal('0')) * (it.quantity or 0)
             lines.append({
                 "kind": "item",
                 "title": f"{getattr(it.product, 'name', 'Неизвестно')} x{it.quantity}",
                 "amount": amount,
-                "time": it.cancelled_at
+                "time": it.cancelled_at,
+                "order_id": it.order_id,
+                "operator": getattr(it.cancelled_by, 'name', '-') if it.cancelled_by else '-'
+
             })
+
+        # удалённые позиции
         for di in data["deleted"]:
             lines.append({
                 "kind": "deleted",
@@ -460,20 +501,35 @@ def report_by_date(request):
                 "amount": None,
                 "time": di.deleted_at
             })
+
+        # сортировка по времени
         lines.sort(key=lambda l: l["time"] or timezone.now(), reverse=True)
         cancellations_blocks.append({"cashier": cashier_name, "lines": lines})
 
-    # Для GET у тебя нет отчётных сумм, но модалка «Отмены» будет заполнена
+    # --- топ отменённых блюд ---
+    cancelled_top_raw = defaultdict(lambda: {"qty": 0, "total": Decimal("0")})
+    for it in cancelled_items:
+        name = getattr(it.product, "name", "Неизвестно")
+        qty = it.quantity or 0
+        price = it.price or Decimal("0")
+        cancelled_top_raw[name]["qty"] += qty
+        cancelled_top_raw[name]["total"] += price * qty
+
+    cancelled_top = [
+        {"name": name, "qty": data["qty"], "total": data["total"]}
+        for name, data in cancelled_top_raw.items()
+    ]
+    cancelled_top.sort(key=lambda r: r["total"], reverse=True)
+
     return render(request, 'report_by_date.html', {
         'login_required': login_required,
         'cancellations_blocks': cancellations_blocks,
+        'cancelled_top': cancelled_top,
         'start_date': start_date,
         'end_date': end_date,
         'start_time': start_time,
         'end_time': end_time,
     })
-
-
 
 
 def orders_list(request):
@@ -724,7 +780,9 @@ def mark_ready(request, order_id):
         order = Order.objects.get(id=order_id)
         order.status = 'ready'
         order.save()
+        order.items.filter(is_draft=True).update(is_draft=False)
         return JsonResponse({"ok": True})
+
     except Order.DoesNotExist:
         return JsonResponse({"ok": False, "error": "Заказ не найден"})
 
@@ -756,6 +814,7 @@ def edit_order(request, order_id):
 @require_POST
 def add_item_to_order(request, order_id):
     order = get_object_or_404(Order, id=order_id)
+
     try:
         data = json.loads(request.body.decode('utf-8'))
     except Exception:
@@ -768,11 +827,15 @@ def add_item_to_order(request, order_id):
 
     product = get_object_or_404(Product, id=product_id)
 
+
     existing = order.items.filter(product=product, cancelled=False).first()
     if existing:
+        if not existing.is_draft:
+            existing.original_quantity = existing.quantity  # сохраняем исходное количество
         existing.quantity += qty
-        existing.is_new = True  # помечаем изменённую позицию как новую
-        existing.save(update_fields=["quantity", "is_new"])
+        existing.is_new = True
+        existing.is_draft = True
+        existing.save(update_fields=["quantity", "is_new", "is_draft", "original_quantity"])
     else:
         OrderItem.objects.create(
             order=order,
@@ -782,6 +845,8 @@ def add_item_to_order(request, order_id):
             options=[],
             cancelled=False,
             is_new=True,
+            is_draft=True,
+            original_quantity=0,  # для новых позиций можно оставить 0
         )
 
     order.is_paid = False
@@ -789,6 +854,22 @@ def add_item_to_order(request, order_id):
 
     items, total = _recalc_and_serialize(order)
     return JsonResponse({'ok': True, 'items': items, 'total': total})
+
+@require_POST
+def discard_draft(request, order_id):
+    order = get_object_or_404(Order, id=order_id)
+
+    for item in order.items.filter(is_draft=True):
+        if item.is_new:
+            # если позиция новая — удаляем
+            item.delete()
+        else:
+            # если позиция существующая — откатываем количество
+            item.quantity = item.original_quantity
+            item.is_draft = False
+            item.save(update_fields=["quantity", "is_draft"])
+
+    return JsonResponse({"ok": True})
 
 
 # ===== API: уменьшить количество =====
@@ -798,13 +879,26 @@ def reduce_item_quantity(request, item_id):
     item = get_object_or_404(OrderItem, id=item_id)
     new_qty = int(request.POST.get("quantity", item.quantity - 1))
 
+    # берём кассира из сессии
+    emp_id = request.session.get("employee_id")
+    emp = Employee.objects.filter(id=emp_id).first()
+
     if new_qty <= 0:
-        item.cancelled = True
-        item.save(update_fields=["cancelled"])
+        if not item.is_draft:
+            item.original_quantity = item.quantity  # сохраняем исходное количество
+        item.quantity = 0
+        item.is_new = True
+        item.is_draft = True
+        item.cancelled_by = emp   # кто инициировал отмену
+        item.save(update_fields=["quantity", "is_new", "is_draft", "original_quantity", "cancelled_by"])
     else:
+        if not item.is_draft:
+            item.original_quantity = item.quantity
         item.quantity = new_qty
-        item.is_new = True  # изменение количества — тоже новая для печати
-        item.save(update_fields=["quantity", "is_new"])
+        item.is_new = True
+        item.is_draft = True
+        item.cancelled_by = emp   # кто инициировал изменение
+        item.save(update_fields=["quantity", "is_new", "is_draft", "original_quantity", "cancelled_by"])
 
     order = item.order
     order.is_paid = False
@@ -818,9 +912,17 @@ def reduce_item_quantity(request, item_id):
 @csrf_exempt
 @require_POST
 def remove_item_from_order(request, item_id):
+    emp_id = request.session.get("employee_id")
+    emp = Employee.objects.filter(id=emp_id).first()
+
     item = get_object_or_404(OrderItem, id=item_id)
-    item.cancelled = True
-    item.save(update_fields=["cancelled"])
+    if not item.is_draft:
+        item.original_quantity = item.quantity
+    item.quantity = 0
+    item.is_new = True
+    item.is_draft = True
+    item.cancelled_by = emp
+    item.save(update_fields=["quantity", "is_new", "is_draft", "original_quantity", "cancelled_by"])
 
     order = item.order
     order.is_paid = False
@@ -830,14 +932,14 @@ def remove_item_from_order(request, item_id):
     return JsonResponse({'ok': True, 'items': items, 'total': total})
 
 
-# ===== API: пересчитать и напечатать изменения =====
 @csrf_exempt
 @require_POST
 def recalc_order_total(request, order_id):
     order = get_object_or_404(Order, id=order_id)
 
     new_items = order.items.filter(is_new=True, cancelled=False)
-    removed_items = order.items.filter(cancelled=True)
+    # кандидаты на удаление — блюда с quantity=0 и is_draft=True
+    removed_candidates = order.items.filter(quantity=0, is_draft=True)
 
     # Определяем тип заказа
     operator = getattr(order, "employee", None)
@@ -857,23 +959,36 @@ def recalc_order_total(request, order_id):
             order_type = "Здесь"; break
 
     # Если нет изменений → ничего не печатаем
-    if not new_items.exists() and not removed_items.exists():
+    if not new_items.exists() and not removed_candidates.exists():
         items, total = _recalc_and_serialize(order)
         return JsonResponse({'ok': True, 'recalc': False, 'items': items, 'total': total})
 
-    # Печать только новых блюд (кухонный и клиентский чек)
+    # Печать новых блюд
     if new_items.exists():
-        print_to_printer("XP-80C (copy 2)", order.receipt_number, order.order_time, new_items,
+        print_to_printer("XP-80C", order.receipt_number, order.order_time, new_items,
                          kitchen=True, order_type=order_type, operator_name=operator_name)
         print_to_printer("XP-80C (copy 2)", order.receipt_number, order.order_time, new_items,
                          kitchen=False, order_type=order_type, operator_name=operator_name)
         new_items.update(is_new=False)
 
-    # при желании можно удалить отменённые позиции
-    # removed_items.delete()
+    # Печать отменённых блюд
+    # Печать отменённых блюд
+    if removed_candidates.exists():
+        print_to_printer("XP-80C", order.receipt_number, order.order_time, removed_candidates,
+                         kitchen=True, order_type=order_type, operator_name=operator_name, cancelled=True)
+        print_to_printer("XP-80C (copy 2)", order.receipt_number, order.order_time, removed_candidates,
+                         kitchen=False, order_type=order_type, operator_name=operator_name, cancelled=True)
 
     items, total = _recalc_and_serialize(order)
+
+    # Сначала сбрасываем черновики
+    order.items.filter(is_draft=True).update(is_draft=False)
+
+    # Затем окончательно помечаем удалённые позиции как отменённые
+    order.items.filter(quantity=0, is_draft=False).update(cancelled=True, cancelled_at=timezone.now())
+
     return JsonResponse({'ok': True, 'recalc': True, 'items': items, 'total': total})
+
 
 
 
@@ -883,15 +998,60 @@ def order_ready(request, order_id):
     order = get_object_or_404(Order, id=order_id)
     order.status = "ready"
     order.save(update_fields=["status"])
+    order.items.filter(is_draft=True).update(is_draft=False)
     return JsonResponse({"ok": True})
 
 @require_GET
 def order_cancel(request, order_id):
     order = get_object_or_404(Order, id=order_id)
+
+    # берём кассира из сессии
+    emp_id = request.session.get("employee_id")
+    emp = Employee.objects.filter(id=emp_id).first()
+
+    # фиксируем единое время отмены
+    cancelled_time = timezone.now()
+
+    # берём все позиции заказа
+    cancelled_items = order.items.all()
+
+    # печать чека отмены (до изменения флагов)
+    if cancelled_items.exists():
+        print_to_printer(
+            "XP-80C (copy 2)",
+            order.receipt_number,
+            order.order_time,
+            cancelled_items,
+            kitchen=True,
+            order_type="Отмена",
+            operator_name=emp.name if emp else "-",
+            cancelled=True
+        )
+        print_to_printer(
+            "XP-80C (copy 2)",
+            order.receipt_number,
+            order.order_time,
+            cancelled_items,
+            kitchen=False,
+            order_type="Отмена",
+            operator_name=emp.name if emp else "-",
+            cancelled=True
+        )
+
     # помечаем все позиции как отменённые
-    order.items.filter(cancelled=False).update(cancelled=True)
+    cancelled_items.update(
+        cancelled=True,
+        cancelled_by=emp,
+        cancelled_at=cancelled_time
+    )
+
+    # проставляем статус и поля отмены у заказа
     order.status = "cancelled"
-    order.save(update_fields=["status"])
+    order.cancelled = True
+    order.cancelled_at = cancelled_time
+    order.cancelled_by = emp
+    order.save(update_fields=["status", "cancelled", "cancelled_at", "cancelled_by"])
+
     return JsonResponse({"ok": True})
 
 @require_GET
@@ -927,6 +1087,7 @@ def order_call(request, order_id):
 
 def print_receipt_direct(order):
     import win32ui
+    import win32print
     from decimal import Decimal
     import pytz
 
@@ -943,7 +1104,7 @@ def print_receipt_direct(order):
 
     # Имена принтеров
     PRINTER_CLIENT = "XP-80C (copy 2)"
-    PRINTER_KITCHEN = "XP-80C (copy 2)"
+    PRINTER_KITCHEN = "XP-80C"
 
     # Тип заказа (используется в обоих чеках)
     order_type = ""
@@ -1043,9 +1204,9 @@ def print_receipt_direct(order):
         # Шапка
         draw_text(pdc, x_name, y, f"ЗАКАЗ №{order_no}", font=font_order_no); y += 70
         draw_text(pdc, x_name, y, "=============================="); y += line_h
-        draw_text(pdc, x_name, y, "MEDIAR FRIED CHICKEN"); y += line_h
+        draw_text(pdc, x_name, y, "BILAL FRIED CHICKEN"); y += line_h
         draw_text(pdc, x_name, y, "ул. Алма-Атинская 295/1"); y += line_h
-        draw_text(pdc, x_name, y, "Мбанк: 0555181618"); y += line_h
+        draw_text(pdc, x_name, y, "Мбанк: 0500919162"); y += line_h
         draw_text(pdc, x_name, y, "=============================="); y += line_h
 
         # Оператор и время
@@ -1060,7 +1221,6 @@ def print_receipt_direct(order):
             if not product:
                 continue
             category = getattr(product, "category", None)
-            # Универсально берём имя категории
             if isinstance(category, str):
                 cat_name = (category or "").strip().lower()
             else:
@@ -1094,7 +1254,7 @@ def print_receipt_direct(order):
         draw_text(pdc, x_name, y, "=============================="); y += line_h
         draw_text(pdc, x_name, y, "ИТОГО:", font=font_total)
         draw_right(pdc, y, f"{int(total_sum)} сом", RIGHT_EDGE, font=font_total); y += 42
-        draw_text(pdc, x_name, y, f"Тип заказа: {order_type}", font=font_order_type); y += 60
+        draw_text(pdc, x_name, y, f"{order_type}", font=font_order_type); y += 60
         draw_text(pdc, x_name, y, "=============================="); y += line_h
         draw_text(pdc, x_name, y, "Оплата: Наличные"); y += line_h
         draw_text(pdc, x_name, y, "Спасибо за покупку!"); y += line_h
@@ -1106,25 +1266,53 @@ def print_receipt_direct(order):
     except Exception as e:
         print(f"Ошибка печати клиентского чека: {e}")
 
+    # ===== Функция Beep =====
+    def send_beep(printer_name):
+        try:
+            hPrinter = win32print.OpenPrinter(printer_name)
+            hJob = win32print.StartDocPrinter(hPrinter, 1, ("Beep", None, "RAW"))
+            win32print.StartPagePrinter(hPrinter)
+            # ESC B n t → 3 сигнала по 500 мс (громко и заметно)
+            win32print.WritePrinter(hPrinter, b'\x1b\x42\x03\x05')
+            win32print.EndPagePrinter(hPrinter)
+            win32print.EndDocPrinter(hPrinter)
+            win32print.ClosePrinter(hPrinter)
+        except Exception as e:
+            print(f"Ошибка отправки Beep: {e}")
+
     # ===== Кухонный чек =====
     try:
         pdc = win32ui.CreateDC()
         pdc.CreatePrinterDC(PRINTER_KITCHEN)
         pdc.StartDoc(f"Кухонный чек №{order_no}")
+
+        # Звуковой сигнал до печати
+        send_beep(PRINTER_KITCHEN)
+
         y = 0
         pdc.StartPage()
 
-        # Утилита для кухни
-        def draw_text_kitchen(pdc, x, y, text, size=30):
+        # Функция для центрирования текста
+        def draw_center(pdc, y, text, size=36):
             font_line = win32ui.CreateFont({"name": "Consolas", "height": size, "weight": 800})
             pdc.SelectObject(font_line)
-            pdc.TextOut(x, y, str(text))
+            w, _ = pdc.GetTextExtent(str(text))
+            x_center = (RIGHT_EDGE - margin_left) // 2 - w // 2 + margin_left
+            pdc.TextOut(x_center, y, str(text))
 
-        # Шапка кухни
-        draw_text_kitchen(pdc, margin_left, y, f"ЗАКАЗ №{order_no}", size=48); y += 40
-        draw_text_kitchen(pdc, margin_left, y, order_dt.strftime('%d.%m.%Y %H:%M'), size=26); y += 35
-        draw_text_kitchen(pdc, margin_left, y, f"Тип заказа: {order_type}", size=42); y += 45
-        draw_text_kitchen(pdc, margin_left, y, "--------------------", size=26); y += 30
+        # Отступ сверху
+        for _ in range(10):
+            draw_center(pdc, y, " ", size=30)
+            y += 30
+
+        # Надпись "КУХНЯ"
+        draw_center(pdc, y, "КУХНЯ", size=48); y += 60
+
+        # Тип заказа и номер
+        draw_center(pdc, y, f"{order_type}", size=54); y += 65
+        draw_center(pdc, y, f"ЗАКАЗ №{order_no}", size=64); y += 60
+        draw_center(pdc, y, order_dt.strftime('%d.%m.%Y %H:%M'), size=36); y += 45
+        draw_center(pdc, y, "--------------------", size=32); y += 40
 
         # Ключевые слова для исключения напитков
         drink_category_keywords = (
@@ -1137,15 +1325,14 @@ def print_receipt_direct(order):
             "сок", "juice", "лимонад", "морс", "компот", "fuse", "iced tea"
         )
 
-        # Формирование позиций для кухни
-        kitchen_items = []
+        # Вывод блюд напрямую
+        has_items = False
         for item in order.items.filter(cancelled=False):
             product = getattr(item, "product", None)
             if not product:
                 continue
 
             category = getattr(product, "category", None)
-            # Универсально берём имя категории (строка или объект)
             if isinstance(category, str):
                 cat_name = (category or "").strip().lower()
             else:
@@ -1156,24 +1343,16 @@ def print_receipt_direct(order):
             is_drink_by_category = bool(cat_name) and any(k in cat_name for k in drink_category_keywords)
             is_drink_by_name = bool(prod_name) and any(k in prod_name for k in drink_name_keywords)
 
-            # Дополнительно исключим явные десерты по категории, если нужно:
-            # (оставлено как пример — закомментировано)
-            # if "десерты" in cat_name or "dessert" in cat_name:
-            #     continue
-
             if is_drink_by_category or is_drink_by_name:
                 continue
 
-            kitchen_items.append((product.name, item.quantity))
+            has_items = True
+            dish_line = f"{product.name} × {int(item.quantity)}"
+            draw_center(pdc, y, dish_line, size=43)
+            y += 50
 
-        # Вывод блюд на кухню
-        if not kitchen_items:
-            draw_text_kitchen(pdc, margin_left, y, "Нет блюд для кухни", size=28); y += 35
-        else:
-            for product_name, qty in kitchen_items:
-                dish_line = f"{product_name} × {int(qty)}"
-                draw_text_kitchen(pdc, margin_left, y, dish_line, size=40)
-                y += 35
+        if not has_items:
+            draw_center(pdc, y, "Нет блюд для кухни", size=30); y += 40
 
         pdc.EndPage()
         pdc.EndDoc()
@@ -1284,9 +1463,9 @@ def reprint_receipt_view(request, order_id):
         y = 0
         draw_text(pdc, x_name, y, f"ЗАКАЗ №{order_no}", font=font_order_no); y += 70
         draw_text(pdc, x_name, y, "=============================="); y += line_h
-        draw_text(pdc, x_name, y, "MEDIAR FRIED CHICKEN"); y += line_h
+        draw_text(pdc, x_name, y, "BILAL FRIED CHICKEN"); y += line_h
         draw_text(pdc, x_name, y, "ул. Алма-Атинская 295/1"); y += line_h
-        draw_text(pdc, x_name, y, "Мбанк: 0555181618"); y += line_h
+        draw_text(pdc, x_name, y, "Мбанк: 0500919162"); y += line_h
         draw_text(pdc, x_name, y, "=============================="); y += line_h
 
         operator = getattr(order, "employee", None)
@@ -1474,7 +1653,22 @@ import win32ui
 def print_to_printer(printer_name, order_no, order_dt, items, kitchen=False, order_type="", operator_name="-"):
     try:
         import win32ui
+        import win32print
         from decimal import Decimal
+
+        # Вспомогательная функция для звукового сигнала (ESC B n t)
+        def send_beep(printer_name):
+            try:
+                hPrinter = win32print.OpenPrinter(printer_name)
+                hJob = win32print.StartDocPrinter(hPrinter, 1, ("Beep", None, "RAW"))
+                win32print.StartPagePrinter(hPrinter)
+                # 3 сигнала по ~500 мс (если принтер поддерживает ESC/POS)
+                win32print.WritePrinter(hPrinter, b'\x1b\x42\x03\x05')
+                win32print.EndPagePrinter(hPrinter)
+                win32print.EndDocPrinter(hPrinter)
+                win32print.ClosePrinter(hPrinter)
+            except Exception as e:
+                print(f"Ошибка отправки Beep: {e}")
 
         pdc = win32ui.CreateDC()
         pdc.CreatePrinterDC(printer_name)
@@ -1491,18 +1685,36 @@ def print_to_printer(printer_name, order_no, order_dt, items, kitchen=False, ord
         RIGHT_EDGE = margin_left + 560
 
         if kitchen:
+            # Сигнал перед печатью кухонного чека
+            send_beep(printer_name)
+
             def draw_text_kitchen(pdc, x, y, text, size=30):
                 font_line = win32ui.CreateFont({"name": "Consolas", "height": size, "weight": 800})
                 pdc.SelectObject(font_line)
                 pdc.TextOut(x, y, str(text))
 
-            y = 0
-            draw_text_kitchen(pdc, margin_left, y, f"ЗАКАЗ №{order_no}", size=48); y += 40
-            draw_text_kitchen(pdc, margin_left, y, order_dt.strftime('%d.%m.%Y %H:%M'), size=26); y += 35
-            draw_text_kitchen(pdc, margin_left, y, f"Тип заказа: {order_type}", size=42); y += 45
-            draw_text_kitchen(pdc, margin_left, y, "--------------------", size=26); y += 30
+            def draw_center(pdc, y, text, size=36):
+                font_line = win32ui.CreateFont({"name": "Consolas", "height": size, "weight": 800})
+                pdc.SelectObject(font_line)
+                w, _ = pdc.GetTextExtent(str(text))
+                x_center = (RIGHT_EDGE - margin_left) // 2 - w // 2 + margin_left
+                pdc.TextOut(x_center, y, str(text))
 
-            # Ключевые слова для исключения напитков
+            y = 0
+
+            # Воздух сверху
+            for _ in range(10):
+                draw_center(pdc, y, " ", size=30)
+                y += 30
+
+            # Шапка кухни
+            draw_center(pdc, y, "КУХНЯ", size=48); y += 60
+            draw_center(pdc, y, f"{order_type}", size=54); y += 65
+            draw_center(pdc, y, f"ЗАКАЗ №{order_no}", size=64); y += 60
+            draw_center(pdc, y, order_dt.strftime('%d.%m.%Y %H:%M'), size=36); y += 45
+            draw_center(pdc, y, "--------------------", size=32); y += 40
+
+            # Исключение напитков
             drink_category_keywords = (
                 "напитки", "холодные напитки", "газированные напитки",
                 "drinks", "beverage"
@@ -1536,14 +1748,15 @@ def print_to_printer(printer_name, order_no, order_dt, items, kitchen=False, ord
                 kitchen_items.append((product.name, item.quantity))
 
             if not kitchen_items:
-                draw_text_kitchen(pdc, margin_left, y, "Нет блюд для кухни", size=28); y += 35
+                draw_center(pdc, y, "Нет блюд для кухни", size=30); y += 40
             else:
                 for product_name, qty in kitchen_items:
                     dish_line = f"{product_name} × {int(qty)}"
-                    draw_text_kitchen(pdc, margin_left, y, dish_line, size=40)
-                    y += 35
+                    draw_center(pdc, y, dish_line, size=43)
+                    y += 50
 
         else:
+            # Кассовый чек
             font_bold = win32ui.CreateFont({"name": "Consolas", "height": 28, "weight": 800})
             font_total = win32ui.CreateFont({"name": "Consolas", "height": 36, "weight": 800})
             font_order_no = win32ui.CreateFont({"name": "Consolas", "height": 60, "weight": 800})
@@ -1558,7 +1771,7 @@ def print_to_printer(printer_name, order_no, order_dt, items, kitchen=False, ord
                 w, _ = pdc.GetTextExtent(str(text))
                 pdc.TextOut(x_right - w, y, str(text))
 
-            # Перенос строк по пробелам, дефисам и скобкам, с безопасной нарезкой длинных токенов
+            # Перенос длинных названий по словам/дефисам/скобкам
             def draw_row(pdc, y, name, qty, price, total):
                 pdc.SelectObject(font_bold)
                 max_width = x_qty - x_name - 10
@@ -1569,8 +1782,7 @@ def print_to_printer(printer_name, order_no, order_dt, items, kitchen=False, ord
                 for ch in text:
                     if ch.isspace() or ch in "-()":
                         if buf:
-                            tokens.append("".join(buf))
-                            buf = []
+                            tokens.append("".join(buf)); buf = []
                         tokens.append(ch)
                     else:
                         buf.append(ch)
@@ -1616,22 +1828,26 @@ def print_to_printer(printer_name, order_no, order_dt, items, kitchen=False, ord
                 return y
 
             y = 0
+            # Шапка
             draw_text(pdc, x_name, y, f"ЗАКАЗ №{order_no}", font=font_order_no); y += 70
             draw_text(pdc, x_name, y, "=============================="); y += line_h
-            draw_text(pdc, x_name, y, "MEDIAR FRIED CHICKEN 🍗🥤"); y += line_h
+            draw_text(pdc, x_name, y, "BILAL FRIED CHICKEN"); y += line_h
             draw_text(pdc, x_name, y, "ул. Алма-Атинская 295/1"); y += line_h
-            draw_text(pdc, x_name, y, "Мбанк: 0555181618"); y += line_h
+            draw_text(pdc, x_name, y, "Мбанк: 0500919162"); y += line_h
             draw_text(pdc, x_name, y, "=============================="); y += line_h
 
+            # Оператор и время
             draw_text(pdc, x_name, y, f"Оператор: {operator_name}"); y += line_h
             draw_text(pdc, x_name, y, order_dt.strftime('%Y.%m.%d %H:%M:%S')); y += line_h
 
+            # Таблица
             draw_text(pdc, x_name, y, "Наименование")
             draw_text(pdc, x_qty, y, "К-во")
             draw_text(pdc, x_price, y, "Цена")
             draw_text(pdc, x_total, y, "Сумма"); y += line_h
             draw_text(pdc, x_name, y, "--------------------------------------"); y += line_h
 
+            # Строки и итог
             total_sum = Decimal("0")
             for item in items:
                 qty = Decimal(item.quantity)
@@ -1640,13 +1856,14 @@ def print_to_printer(printer_name, order_no, order_dt, items, kitchen=False, ord
                 total_sum += line_total
                 y = draw_row(pdc, y, item.product.name, qty, price, line_total)
 
+            # Итог
             draw_text(pdc, x_name, y, "=============================="); y += line_h
             draw_text(pdc, x_name, y, "ИТОГО:", font=font_total)
             draw_right(pdc, y, f"{int(total_sum)} сом", RIGHT_EDGE, font=font_total); y += 42
-            draw_text(pdc, x_name, y, f"Тип заказа: {order_type}", font=font_order_type); y += 60
+            draw_text(pdc, x_name, y, f"{order_type}", font=font_order_type); y += 60
             draw_text(pdc, x_name, y, "=============================="); y += line_h
             draw_text(pdc, x_name, y, "Оплата: Наличные"); y += line_h
-            draw_text(pdc, x_name, y, "Спасибо за покупку! 🍗🥤"); y += line_h
+            draw_text(pdc, x_name, y, "Спасибо за покупку!"); y += line_h
             draw_text(pdc, x_name, y, "=============================="); y += line_h
 
         pdc.EndPage()
@@ -1655,6 +1872,8 @@ def print_to_printer(printer_name, order_no, order_dt, items, kitchen=False, ord
 
     except Exception as e:
         print(f"Ошибка печати ({'кухня' if kitchen else 'касса'}): {e}")
+
+
 
 
 
@@ -1715,5 +1934,123 @@ def recalc_order_view(request, order_id):
     except Exception as e:
         return JsonResponse({'error': str(e)}, status=500)
 
+
+@require_POST
+def print_cancelled_receipt(request):
+    import win32ui
+    import win32print
+    import json
+    from collections import defaultdict
+    from datetime import datetime
+
+    now = timezone.now()
+
+    # Принимаем JSON или form-data
+    if request.content_type == "application/json":
+        try:
+            data = json.loads(request.body.decode("utf-8"))
+        except Exception:
+            return JsonResponse({"ok": False, "error": "Невалидный JSON"})
+    else:
+        data = request.POST or request.GET
+
+    # Диапазон
+    start_date = data.get("start")
+    end_date   = data.get("end")
+    start_time = data.get("start_time")
+    end_time   = data.get("end_time")
+
+    if start_date and end_date and start_time and end_time:
+        try:
+            start_dt = timezone.make_aware(datetime.strptime(f"{start_date} {start_time}", "%Y-%m-%d %H:%M"))
+            end_dt   = timezone.make_aware(datetime.strptime(f"{end_date} {end_time}", "%Y-%m-%d %H:%M"))
+        except Exception:
+            start_dt = now.replace(hour=0, minute=0, second=0, microsecond=0)
+            end_dt   = start_dt + timezone.timedelta(days=1)
+    else:
+        start_dt = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        end_dt   = start_dt + timezone.timedelta(days=1)
+
+    # Выборка отмен
+    cancelled_orders = Order.objects.filter(status="cancelled", cancelled_at__range=(start_dt, end_dt))
+    cancelled_items  = OrderItem.objects.filter(cancelled=True, cancelled_at__range=(start_dt, end_dt))
+
+    # Группировка блюд по заказу
+    items_by_order = defaultdict(list)
+    for it in cancelled_items:
+        items_by_order[it.order_id].append(it)
+
+    # Печать
+    printer_name = "XP-80C (copy 2)"
+    pdc = win32ui.CreateDC()
+    pdc.CreatePrinterDC(printer_name)
+    pdc.StartDoc("Отменённые заказы и блюда")
+    pdc.StartPage()
+
+    font = win32ui.CreateFont({"name": "Consolas", "height": 28, "weight": 800})
+    pdc.SelectObject(font)
+
+    x = 0
+    line_h = 30
+    y = 0
+
+    def draw(text):
+        nonlocal y
+        pdc.TextOut(x, y, str(text))
+        y += line_h
+
+    # Заголовок и период
+    draw("=== ОТМЕНЫ ===")
+    draw(f"{timezone.localtime(start_dt).strftime('%Y.%m.%d %H:%M:%S')} - {timezone.localtime(end_dt).strftime('%Y.%m.%d %H:%M:%S')}")
+    draw("----------------------------------")
+
+    printed_ids = set()
+
+    # Раздел: отменённые заказы
+    draw("Отменённые заказы:")
+    for order in cancelled_orders:
+        cashier_name = getattr(order.cancelled_by, 'name', '-') if order.cancelled_by else '-'
+        order_time = order.cancelled_at.strftime('%Y.%m.%d %H:%M:%S') if order.cancelled_at else '-'
+
+        draw(f"Заказ №{order.receipt_number or order.id} — {int(order.total or 0)} сом")
+        draw(f"Оператор: {cashier_name}")
+        draw(f"Время отмены: {order_time}")
+
+        # Позиции внутри заказа
+        for it in items_by_order.get(order.id, []):
+            it_name = getattr(it.product, 'name', 'Неизвестно')
+            qty = it.original_quantity or it.quantity or 0
+            amount = int((it.price or 0) * qty)
+            it_cashier = getattr(it.cancelled_by, 'name', '-') if it.cancelled_by else '-'
+            it_time = it.cancelled_at.strftime('%Y.%m.%d %H:%M:%S') if it.cancelled_at else '-'
+
+            draw(f"{it_name} x{qty} — {amount} сом")
+            draw(f"Оператор: {it_cashier}")
+            draw(f"Время отмены: {it_time}")
+
+        printed_ids.add(order.id)
+        draw("----------------------------------")
+
+    # Раздел: блюда без отменённого заказа
+    orphan_items = [it for it in cancelled_items if it.order_id not in printed_ids]
+    if orphan_items:
+        draw("Блюда без отменённого заказа:")
+        for it in orphan_items:
+            it_name = getattr(it.product, 'name', 'Неизвестно')
+            qty = it.original_quantity or it.quantity or 0
+            amount = int((it.price or 0) * qty)
+            it_cashier = getattr(it.cancelled_by, 'name', '-') if it.cancelled_by else '-'
+            it_time = it.cancelled_at.strftime('%Y.%m.%d %H:%M:%S') if it.cancelled_at else '-'
+
+            draw(f"{it_name} x{qty} — {amount} сом")
+            draw(f"Оператор: {it_cashier}")
+            draw(f"Время отмены: {it_time}")
+        draw("----------------------------------")
+
+    pdc.EndPage()
+    pdc.EndDoc()
+    pdc.DeleteDC()
+
+    return JsonResponse({"ok": True, "printed": True})
 
 

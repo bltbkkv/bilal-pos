@@ -80,6 +80,11 @@ path('orders/<int:order_id>/call/', views.order_call, name='order_call'),
 
 path('orders/<int:order_id>/receipt/reprint/', views.reprint_receipt_view, name='reprint_receipt_view'),
 
+path("print/cancelled/", views.print_cancelled_receipt, name="print_cancelled_receipt"),
+
+
+path('orders/<int:order_id>/discard-draft/', views.discard_draft, name='discard_draft'),
+
 
 
     # завершение работы сервера

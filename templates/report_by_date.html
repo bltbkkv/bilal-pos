@@ -159,13 +159,11 @@
     <div class="nav">
       <a href="/menu/">Меню</a>
       <a href="{% url 'orders_list' %}">Заказы</a>
-      <form method="get" action="{% url 'report_receipt' %}" style="display:inline;">
-        <input type="hidden" name="start" value="{{ start_date }}">
-        <input type="hidden" name="end" value="{{ end_date }}">
-        <input type="hidden" name="start_time" value="{{ start_time }}">
-        <input type="hidden" name="end_time" value="{{ end_time }}">
-      </form>
-      <button onclick="openModal()">Прибыль по товарам</button>
+
+      <!-- Кнопка модалки прибыли -->
+      <button type="button" onclick="openProfitModal()">Прибыль по товарам</button>
+
+      <!-- Быстрая выдача чека отчёта по выбранному диапазону -->
       <form method="get" action="{% url 'report_receipt' %}" style="display:inline;">
         <input type="hidden" name="start" value="{{ start_date }}">
         <input type="hidden" name="end" value="{{ end_date }}">
@@ -173,7 +171,9 @@
         <input type="hidden" name="end_time" value="{{ end_time }}">
         <button type="submit">Выдать чек</button>
       </form>
-      <button type="button" onclick="document.getElementById('cancelModal').style.display='block'">Отмены</button>
+
+      <!-- Кнопка модалки отмен -->
+      <button type="button" onclick="openCancelModal()">Отмены</button>
     </div>
   </header>
 
@@ -207,7 +207,7 @@
           </div>
         </div>
         <button type="submit">Сформировать отчёт</button>
-        <button class="btn btn-secondary" onclick="setDefaultRange()">По умолчанию</button>
+        <button class="btn btn-secondary" type="button" onclick="setDefaultRange()">По умолчанию</button>
       {% endif %}
     </form>
 
@@ -220,9 +220,10 @@
     {% endif %}
   </div>
 
+  <!-- Модалка прибыли -->
   <div id="profitModal" class="modal">
     <div class="modal-content">
-      <span class="close" onclick="closeModal()">&times;</span>
+      <span class="close" onclick="closeProfitModal()">&times;</span>
       <h2>Прибыль по товарам</h2>
       <table>
         <tr>
@@ -245,51 +246,67 @@
     </div>
   </div>
 
-<!-- Модалка отмен — безопасный чековый вывод -->
-<div id="cancelModal" class="modal">
-  <div class="modal-content" style="font-family: monospace; line-height: 1.6;">
-    <span class="close" onclick="document.getElementById('cancelModal').style.display='none'">&times;</span>
-    <h2>Отменённые заказы и блюда</h2>
+  <!-- Модалка отмен -->
+  <div id="cancelModal" class="modal">
+    <div class="modal-content" style="font-family: monospace; line-height: 1.6;">
+      <span class="close" onclick="closeCancelModal()">&times;</span>
+      <h2>Отменённые заказы и блюда</h2>
 
-    {% if cancellations_blocks %}
-      {% for block in cancellations_blocks %}
-        <div style="border:1px dashed #555; border-radius:8px; padding:12px; margin:12px 0; background:#222;">
-          <div style="color:#ffc107; font-weight:bold; margin-bottom:8px;">
-            Кассир: {{ block.cashier }}
-          </div>
-
-          {% for line in block.lines %}
-            <div style="display:grid; grid-template-columns: 1fr auto auto; gap:8px; padding:4px 0; border-bottom:1px dotted #333;">
-              <div>{{ line.title }}</div>
-              <div>
-                {% if line.amount %}
-                  {{ line.amount }} сом
-                {% else %}
-                  &nbsp;
-                {% endif %}
-              </div>
-              <div>{{ line.time|date:"d.m H:i" }}</div>
+      {% if cancellations_blocks %}
+        {% for block in cancellations_blocks %}
+          <div style="border:1px dashed #555; border-radius:8px; padding:12px; margin:12px 0; background:#222;">
+            <div style="color:#ffc107; font-weight:bold; margin-bottom:8px;">
+              Кассир: {{ block.cashier }}
             </div>
-          {% endfor %}
-        </div>
-      {% endfor %}
+
+            {% for line in block.lines %}
+  <div style="padding:4px 0; border-bottom:1px dotted #333;">
+    {% if line.kind == "order" %}
+      <strong style="color:#0af;">{{ line.title }}</strong>
+    {% elif line.kind == "item" %}
+      {{ line.title }}
+    {% elif line.kind == "deleted" %}
+      <span style="color:#ff4d4d;">{{ line.title }}</span>
     {% else %}
-      <p>Нет отменённых заказов или блюд</p>
+      {{ line.title }}
     {% endif %}
+
+    {% if line.amount %} — {{ line.amount }} сом{% endif %}
+    <span style="float:right;">
+      {{ line.operator }} / {{ line.time|date:"d.m H:i" }}
+    </span>
   </div>
-</div>
+{% endfor %}
 
+          </div>
+        {% endfor %}
+      {% else %}
+        <p>Нет отменённых заказов или блюд</p>
+      {% endif %}
 
-
-
+      <!-- Выдача чека отмен по выбранному диапазону -->
+      <button type="button" onclick="printCancelledReceipt()" style="margin-top:20px; padding:12px 20px; font-size:18px; background:#ffc107; border:none; border-radius:6px; cursor:pointer;">
+        Выдать чек
+      </button>
+    </div>
+  </div>
 
   <script>
-    function openModal() {
+    // Открытие/закрытие модалок
+    function openProfitModal() {
       document.getElementById("profitModal").style.display = "block";
     }
-    function closeModal() {
+    function closeProfitModal() {
       document.getElementById("profitModal").style.display = "none";
     }
+    function openCancelModal() {
+      document.getElementById("cancelModal").style.display = "block";
+    }
+    function closeCancelModal() {
+      document.getElementById("cancelModal").style.display = "none";
+    }
+
+    // Диапазон по умолчанию
     function setDefaultRange() {
       const now = new Date();
       const yyyy = now.getFullYear();
@@ -310,8 +327,36 @@
       document.getElementById('start-time').value = '09:00';
       document.getElementById('end-time').value = '02:00';
     }
+
+    // Печать чека отмен — передаём выбранный диапазон
+    function printCancelledReceipt() {
+      const startDate = document.getElementById('start-date').value;
+      const endDate = document.getElementById('end-date').value;
+      const startTime = document.getElementById('start-time').value;
+      const endTime = document.getElementById('end-time').value;
+
+      fetch("{% url 'print_cancelled_receipt' %}", {
+        method: "POST",
+        headers: {
+          "X-CSRFToken": "{{ csrf_token }}",
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          start: startDate,
+          end: endDate,
+          start_time: startTime,
+          end_time: endTime
+        })
+      })
+      .then(response => response.json())
+      .then(data => {
+        if (data.ok && data.printed) {
+          closeCancelModal();
+        } else {
+          alert('Ошибка при печати чека');
+        }
+      })
+      .catch(() => alert('Ошибка соединения с принтером'));
+    }
   </script>
-
 </body>
-</html>
-

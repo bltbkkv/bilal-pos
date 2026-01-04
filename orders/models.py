@@ -50,6 +50,7 @@ class Order(models.Model):
     STATUS_CHOICES = [
         ('pending', 'Готовится'),
         ('ready', 'Готово'),
+        ('cancelled', 'Отменён'),
     ]
 
     ORDER_TYPE_CHOICES = [
@@ -128,6 +129,8 @@ class OrderItem(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     options = models.JSONField(default=list, blank=True, null=True) # 🔹 добавлено поле для модификаторов ("без овощей")
     is_new = models.BooleanField(default=False)
+    is_draft = models.BooleanField(default=False)
+    original_quantity = models.IntegerField(default=0)
 
     def total_price(self):
         return (self.price or self.product.price) * (self.quantity or 0)

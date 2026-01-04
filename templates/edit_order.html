@@ -39,6 +39,96 @@
     }
     .notify.show { opacity: 1; }
     .notify.error { background: #dc3545; }
+/* Модалка оплаты */
+#payment-modal .modal-content {
+  background: #111;
+  width: 320px;
+  border-radius: 8px;
+  padding: 20px;
+  color: #fff;
+  text-align: center;
+}
+
+#payment-modal h2 {
+  margin-bottom: 12px;
+  font-size: 20px;
+}
+
+#payment-modal p {
+  margin: 8px 0;
+  font-size: 16px;
+}
+
+#payment-display {
+  width: 100%;
+  font-size: 28px;
+  padding: 10px;
+  margin-bottom: 15px;
+  text-align: center;
+  border: none;
+  border-radius: 8px;
+  background: #222;
+  color: #fff;
+}
+
+#payment-change {
+  font-size: 20px;
+  font-weight: bold;
+  margin-top: 8px;
+}
+
+/* Клавиатура для оплаты */
+#payment-modal .keyboard {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 10px;
+  margin-top: 10px;
+}
+
+#payment-modal .keyboard button {
+  font-size: 24px;
+  padding: 20px;
+  background: #333;
+  color: #fff;
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+
+#payment-modal .keyboard button:hover {
+  background: #555;
+}
+
+/* Кнопки действий */
+#payment-modal .actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 15px;
+}
+
+#payment-modal .actions button {
+  flex: 1;
+  padding: 18px 24px;   /* увеличенный внутренний отступ */
+  font-size: 20px;      /* крупнее текст */
+  border-radius: 10px;  /* более округлые углы */
+  border: none;
+  cursor: pointer;
+}
+
+#btn-paid {
+  background: #0a0;
+  color: #fff;
+  font-weight: bold;
+}
+
+#btn-cancel-payment {
+  background: #a00;
+  color: #fff;
+  font-weight: bold;
+}
+
+
   </style>
 </head>
 <body>
@@ -47,8 +137,7 @@
     <div class="actions" style="margin-top: 20px; display: flex; gap: 12px; flex-wrap: wrap;">
       <button class="btn btn-primary" onclick="reprintReceipt({{ order.id }})">🖨️ Чек</button>
       <button class="btn btn-primary" onclick="callOrder({{ order.id }})">📢 Вызов</button>
-      <button class="btn btn-danger" onclick="cancelOrder({{ order.id }})">❌ Отменить</button>
-      <button class="btn btn-green" onclick="markReady({{ order.id }})">✅ Готово</button>
+      <button class="btn btn-secondary" onclick="goBack()">⬅️ Назад</button>
     </div>
   </header>
 
@@ -67,7 +156,17 @@
         {% endfor %}
       </div>
       <div class="total">Итого: <span id="order-total">{{ order.total }} сом</span></div>
+
+      <!-- Назад (без сохранения изменений) -->
+
+      <!-- Пересчитать -->
       <button class="btn btn-primary" onclick="recalc({{ order.id }})">Пересчитать</button>
+
+      <!-- Под Пересчитать располагаем Отменить и Готово -->
+      <div style="margin-top:10px; display:flex; gap:24px; flex-wrap:wrap;">
+        <button class="btn btn-green" onclick="openPaymentModal({{ order.id }}, {{ order.total }})">✅ Готово</button>
+        <button class="btn btn-danger" onclick="cancelOrder({{ order.id }})">❌ Удалить заказ</button>
+      </div>
     </div>
 
     <div class="panel">
@@ -94,6 +193,7 @@
       {% endfor %}
     </div>
   </div>
+
   <div id="notify" class="notify"></div>
 
   <script>
@@ -114,9 +214,29 @@
     }
     const csrftoken = getCookie('csrftoken');
 
+    // Назад — просто переход без сохранения
+   async function goBack() {
+  const orderId = {{ order.id }};  // Django вставит ID заказа
+
+  try {
+    await fetch(`/orders/${orderId}/discard-draft/`, {
+      method: 'POST',
+      headers: {
+        'X-CSRFToken': csrftoken
+      }
+    });
+  } catch (e) {
+    console.warn("Ошибка при удалении черновиков", e);
+  }
+
+  window.location.href = "/orders/";
+}
+
+
     function showTab(cat) {
       document.querySelectorAll('.tab-content').forEach(el => el.style.display = 'none');
-      document.getElementById('tab-' + cat).style.display = 'block';
+      const target = document.getElementById('tab-' + cat);
+      if (target) target.style.display = 'block';
     }
 
     document.addEventListener('DOMContentLoaded', () => {
@@ -259,8 +379,104 @@
         box.className = "notify";
       }, 2000);
     }
-  </script>
+
+    // ====== Логика модалки оплаты ======
+    let currentOrderId = null;
+    let currentOrderTotal = 0;
+
+    function openPaymentModal(orderId, total) {
+      currentOrderId = orderId;
+      currentOrderTotal = total;
+      document.getElementById('payment-total').textContent = total;
+      document.getElementById('payment-display').value = "";
+      document.getElementById('payment-change').textContent = "0";
+      document.getElementById('payment-modal').style.display = "flex";
+    }
+
+    function closePaymentModal() {
+      document.getElementById('payment-modal').style.display = "none";
+    }
+
+    function pressPayKey(val) {
+      const display = document.getElementById("payment-display");
+      display.value += val;
+      updatePaymentChange();
+    }
+
+    function clearPayInput() {
+      const display = document.getElementById("payment-display");
+      display.value = "";
+      updatePaymentChange();
+    }
+
+    function backspacePay() {
+      const display = document.getElementById("payment-display");
+      display.value = display.value.slice(0, -1);
+      updatePaymentChange();
+    }
+
+    function updatePaymentChange() {
+      const display = document.getElementById("payment-display");
+      const changeSpan = document.getElementById("payment-change");
+      const cash = parseFloat(display.value) || 0;
+      const change = cash - currentOrderTotal;
+      changeSpan.textContent = change.toFixed(2);
+      changeSpan.style.color = change >= 0 ? "green" : "red";
+    }
+
+    async function confirmPayment() {
+      if (!currentOrderId) return;
+      const resp = await fetch(`/orders/${currentOrderId}/ready/`, {
+        method: 'POST',
+        headers: { 'X-CSRFToken': csrftoken }
+      });
+      const data = await resp.json();
+      if (data.ok) {
+        closePaymentModal();
+        window.location.href = "/orders/";
+      } else {
+        alert("Ошибка при завершении заказа");
+      }
+    }
+</script>
+
 </body>
+
+<div id="payment-modal" class="modal" style="display:none;">
+  <div class="modal-content">
+    <h2>Оплата заказа</h2>
+    <p>Итого: <span id="payment-total">0</span> сом</p>
+
+    <input id="payment-display" type="text" readonly placeholder="Введите сумму" />
+    <p>Сдача: <span id="payment-change">0</span> сом</p>
+
+    <div class="keyboard">
+      <button onclick="pressPayKey('1')">1</button>
+      <button onclick="pressPayKey('2')">2</button>
+      <button onclick="pressPayKey('3')">3</button>
+      <button onclick="pressPayKey('4')">4</button>
+      <button onclick="pressPayKey('5')">5</button>
+      <button onclick="pressPayKey('6')">6</button>
+      <button onclick="pressPayKey('7')">7</button>
+      <button onclick="pressPayKey('8')">8</button>
+      <button onclick="pressPayKey('9')">9</button>
+      <button onclick="pressPayKey('0')">0</button>
+      <button onclick="clearPayInput()">C</button>
+      <button onclick="backspacePay()">←</button>
+    </div>
+
+    <div class="actions" style="margin-top:20px; display:flex; gap:16px;">
+      <button id="btn-paid" onclick="confirmPayment()">✅ Оплачено</button>
+      <button id="btn-cancel-payment" onclick="closePaymentModal()">❌ Отменить</button>
+    </div>
+  </div>
+</div>
+
+  </div>
+</div>
+
+
+
 
 </html>
 

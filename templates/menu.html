@@ -23,7 +23,8 @@ body {
 .layout {
   display: flex;
   flex-direction: column;
-  height: 100%;
+  width: 1024px;
+  height: 768px;
 }
 .topbar {
   height: 60px;
@@ -36,18 +37,21 @@ body {
 }
 .content {
   display: flex;
-  height: calc(100% - 60px);
+  height: calc(768px - 60px);
 }
 .left {
-  flex: 1;
+  width: 724px; /* 1024 - 300 */
   padding: 8px;
   display: flex;
   flex-direction: column;
 }
 .categories {
   display: flex;
+  flex-wrap: nowrap;
   gap: 6px;
   margin-bottom: 6px;
+  overflow-x: auto;
+  max-width: 724px;
 }
 .cat-btn {
   padding: 10px 14px;
@@ -64,15 +68,15 @@ body {
   flex: 1;
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+  grid-auto-rows: 140px;
   gap: 6px;
-  padding-right: 6px;
+  overflow: hidden; /* убираем скролл */
 }
 .item {
   background: #2c2c2c;
   border-radius: 6px;
   padding: 4px;
   text-align: center;
-  height: 140px;
   display: flex;
   flex-direction: column;
   justify-content: space-between;
@@ -101,14 +105,14 @@ body {
   background: #2a2a2a;
   display: flex;
   flex-direction: column;
-  height: 100%;
+  height: 708px; /* 768 - 60 */
 }
 .cart-inner {
   flex: 1;
   display: flex;
   flex-direction: column;
   padding: 10px;
-  overflow-y: auto;
+  overflow: hidden; /* убираем скролл */
 }
 .cart-panel h2 {
   font-size: 18px;
@@ -116,7 +120,6 @@ body {
 }
 #cart-items {
   flex: 1;
-  overflow-y: auto;
   border: 1px solid #444;
   border-radius: 6px;
   background: #1f1f1f;
@@ -160,11 +163,6 @@ body {
   background: #ff4d4d;
   color: white;
 }
-.product-scroll {
-  flex: 1;
-  overflow-y: auto;
-  max-height: calc(768px - 60px - 90px);
-}
 
 /* Модальные окна */
 .modal {
@@ -176,7 +174,7 @@ body {
   display: none;
   justify-content: center;
   align-items: center;
-  z-index: 100000; /* всегда поверх */
+  z-index: 100000;
 }
 .modal-content {
   background: #2c2c2c;
@@ -250,6 +248,7 @@ body {
   font-weight: bold;
 }
 </style>
+
 
 
 
@@ -333,65 +332,6 @@ body {
 
 <script>
 (function() {
-  document.addEventListener('DOMContentLoaded', function() {
-    var pinModal = document.getElementById('pinModal');
-    var pinInput = document.getElementById('pinInput');
-    var pinSubmit = document.getElementById('pinSubmit');
-    var pinError = document.getElementById('pinError');
-
-    if (!pinModal) return;
-
-    if (pinInput) pinInput.focus();
-
-    function showError(msg) {
-      if (pinError) {
-        pinError.textContent = msg || 'Неверный PIN';
-        pinError.style.display = 'block';
-      }
-    }
-    function hideError() {
-      if (pinError) pinError.style.display = 'none';
-    }
-
-    async function submitPin() {
-      try {
-        hideError();
-        var pin = (pinInput && pinInput.value || '').trim();
-        if (!pin) {
-          showError('Введите PIN');
-          return;
-        }
-        var resp = await fetch('/employee/get-id/?pin=' + encodeURIComponent(pin));
-        if (!resp.ok) {
-          showError('Ошибка подключения (' + resp.status + ')');
-          return;
-        }
-        var data = await resp.json();
-        if (data && data.id) {
-          // редирект на меню с привязкой кассира
-          window.location.href = '/menu/?emp=' + data.id;
-        } else {
-          showError('Неверный PIN');
-        }
-      } catch (e) {
-        console.error('Ошибка при проверке PIN:', e);
-        showError('Неожиданная ошибка');
-      }
-    }
-
-    if (pinSubmit) pinSubmit.addEventListener('click', submitPin);
-    if (pinInput) {
-      pinInput.addEventListener('keydown', function(e) {
-        if (e.key === 'Enter') submitPin();
-      });
-    }
-  });
-})();
-</script>
-
-<script>
-
-(function() {
   function updateChange() {
     const cashInput = document.getElementById('cashGiven');
     const changeSpan = document.getElementById('changeAmount');
@@ -452,45 +392,44 @@ document.addEventListener('DOMContentLoaded', function() {
     if (cartTotal) cartTotal.textContent = '0';
     clearCalculator();
   }
-
-  if (btnCheckout) {
-    btnCheckout.addEventListener('click', function() {
-      // собираем данные корзины
-      const items = [];
-      document.querySelectorAll('#cart-items .cart-item').forEach(el => {
-        items.push({
-          id: el.dataset.id,
-          qty: el.dataset.qty,
-          price: el.dataset.price
-        });
-      });
-
-      const payload = {
-        employee_id: document.getElementById('pin-input')?.value || 1,
-        items: items,
-        note: document.getElementById('order-note')?.value || ''
-      };
-
-      fetch("/orders/submit/", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload)
-      })
-      .then(res => res.json())
-      .then(data => {
-        if (data.ok) {
-          notify("Заказ оформлен №" + data.order_number, "success");
-          clearCart();
-        } else {
-          notify("Ошибка: " + data.error, "error");
-        }
-      })
-      .catch(err => {
-        console.error("Ошибка оформления:", err);
-        notify("Ошибка подключения", "error");
+if (btnCheckout) {
+  btnCheckout.addEventListener('click', function() {
+    const items = [];
+    document.querySelectorAll('#cart-items .cart-item').forEach(el => {
+      items.push({
+        id: el.dataset.id,
+        qty: el.dataset.qty,
+        price: el.dataset.price
       });
     });
-  }
+
+    const payload = {
+      employee_id: document.getElementById('pin-input')?.value || 1,
+      items: items,
+      note: document.getElementById('order-note')?.value || ''
+    };
+
+    fetch("/orders/submit/", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    })
+    .then(res => res.json())
+    .then(data => {
+      if (data.ok) {
+        notify("Заказ оформлен №" + data.order_number, "success");
+        // корзина остаётся как есть
+      } else {
+        notify("Ошибка: " + data.error, "error");
+      }
+    })
+    .catch(err => {
+      console.error("Ошибка оформления:", err);
+      notify("Ошибка подключения", "error");
+    });
+  });
+}
+
 
   if (btnClear) {
     btnClear.addEventListener('click', function() {
@@ -585,10 +524,8 @@ window.addEventListener('load', () => {
     modal.style.display = 'flex';
   }
 });
-
-
-
 </script>
+
 {% if not employee %}
 <div id="pinModal" class="modal" aria-hidden="false">
   <div class="modal-content">
