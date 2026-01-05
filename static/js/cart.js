@@ -115,26 +115,7 @@ async function checkout() {
   }
 }
 
-// ✅ Вход кассира
-function submitPin() {
-  const pinInput = document.getElementById('pin-input');
-  const pin = pinInput?.value.trim();
-  if (!pin) return notify("Введите PIN", "error");
 
-  fetch(`/employee/get-id/?pin=${encodeURIComponent(pin)}`)
-    .then(res => res.json())
-    .then(data => {
-      if (data.id) {
-        window.location.href = `/menu/?emp=${data.id}`;
-      } else {
-        notify("Неверный PIN", "error");
-      }
-    })
-    .catch(err => {
-      console.error("Ошибка при проверке PIN:", err);
-      notify("Ошибка подключения", "error");
-    });
-}
 
 // ✅ Отметить заказ как готов
 async function markReady(orderNumber) {

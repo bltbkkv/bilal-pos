@@ -1284,7 +1284,7 @@ def print_receipt_direct(order):
 
     # Имена принтеров
     PRINTER_CLIENT = "XP-80C (copy 2)"
-    PRINTER_KITCHEN = "XP-80C"
+    PRINTER_KITCHEN = "XP-80C (copy 2)"
 
     # Тип заказа (используется в обоих чеках)
     order_type = ""

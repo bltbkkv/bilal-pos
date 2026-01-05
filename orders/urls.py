@@ -87,6 +87,8 @@ path('orders/<int:order_id>/discard-draft/', views.discard_draft, name='discard_
 
 
 
+
+
     # завершение работы сервера
     path("shutdown/", shutdown),
 ]
