@@ -127,6 +127,14 @@
   color: #fff;
   font-weight: bold;
 }
+.btn-large {
+  flex: 1;                /* одинаковая ширина */
+  padding: 20px 32px;      /* одинаковые внутренние отступы */
+  font-size: 20px;         /* одинаковый размер текста */
+  border-radius: 10px;     /* одинаковые углы */
+  font-weight: bold;       /* одинаковая жирность */
+  text-align: center;
+}
 
 
   </style>
@@ -134,11 +142,12 @@
 <body>
   <header class="topbar">
     <div class="brand">Mediar fried chiken</div>
-    <div class="actions" style="margin-top: 20px; display: flex; gap: 12px; flex-wrap: wrap;">
-      <button class="btn btn-primary" onclick="reprintReceipt({{ order.id }})">🖨️ Чек</button>
-      <button class="btn btn-primary" onclick="callOrder({{ order.id }})">📢 Вызов</button>
-      <button class="btn btn-secondary" onclick="goBack()">⬅️ Назад</button>
-    </div>
+<div class="actions" style="margin-top: 20px; display: flex; gap: 30px; flex-wrap: wrap;">
+  <button class="btn btn-primary" onclick="reprintReceipt({{ order.id }})">🖨️ Чек</button>
+  <button class="btn btn-primary" onclick="callOrder({{ order.id }})">📢 Вызов</button>
+  <button class="btn btn-secondary" onclick="goBack()">⬅️ Назад</button>
+</div>
+
   </header>
 
   <div class="wrap">
@@ -159,14 +168,20 @@
 
       <!-- Назад (без сохранения изменений) -->
 
-      <!-- Пересчитать -->
-      <button class="btn btn-primary" onclick="recalc({{ order.id }})">Пересчитать</button>
 
-      <!-- Под Пересчитать располагаем Отменить и Готово -->
-      <div style="margin-top:10px; display:flex; gap:24px; flex-wrap:wrap;">
-        <button class="btn btn-green" onclick="openPaymentModal({{ order.id }}, {{ order.total }})">✅ Готово</button>
-        <button class="btn btn-danger" onclick="cancelOrder({{ order.id }})">❌ Удалить заказ</button>
-      </div>
+<!-- Пересчитать -->
+<div style="margin-top:20px; display:flex; justify-content:flex-start;">
+  <button class="btn btn-primary" onclick="recalc({{ order.id }})">Пересчитать</button>
+</div>
+
+<!-- Под Пересчитать располагаем Отменить и Готово -->
+<div style="margin-top:50px; display:flex; justify-content:flex-start; gap:80px; flex-wrap:wrap;">
+  <button class="btn btn-green btn-large" onclick="openPaymentModal({{ order.id }}, {{ order.total }})">✅ Готово</button>
+  <button class="btn btn-danger btn-large" onclick="cancelOrder({{ order.id }})">❌ Удалить заказ</button>
+</div>
+
+
+
     </div>
 
     <div class="panel">

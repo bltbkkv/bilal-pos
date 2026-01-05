@@ -1,6 +1,8 @@
 from django.db import models
 from django.contrib.auth.models import User
 from django.utils import timezone
+from django.core.exceptions import ValidationError
+
 
 class Employee(models.Model):
     id = models.AutoField(primary_key=True)
@@ -16,6 +18,11 @@ class Employee(models.Model):
         return f"{self.name} ({self.role})"
 
 
+from django.core.exceptions import ValidationError
+
+from django.core.exceptions import ValidationError
+from django.db import models
+
 class Product(models.Model):
     id = models.AutoField(primary_key=True)
     name = models.CharField(max_length=100, null=True, blank=True)
@@ -26,12 +33,44 @@ class Product(models.Model):
     is_active = models.BooleanField(default=True)
     image = models.ImageField(upload_to='products/', null=True, blank=True)
 
-    ingredient_type = models.CharField(max_length=50, choices=[('lavash_m', 'M-лаваш'), ('lavash_l', 'Л-лаваш'),
-                                                               ('lavash_s', 'Сырный лаваш'), ('bun', 'Булочка'),
-                                                               ('strips', 'Стрипсы'), ('wings', 'Крылышки'), ],
-                                       null=True, blank=True)
-    ingredient_usage = models.DecimalField(max_digits=5, decimal_places=2, default=1,
-                                           help_text="Сколько единиц ингредиента расходуется на одну порцию")
+    ingredient_type = models.CharField(
+        max_length=50,
+        choices=[
+            ('lavash_m', 'M-лаваш'),
+            ('lavash_l', 'Л-лаваш'),
+            ('lavash_s', 'Сырный лаваш'),
+            ('bun', 'Булочка'),
+            ('strips', 'Стрипсы'),
+            ('wings', 'Крылышки'),
+        ],
+        null=True, blank=True
+    )
+    ingredient_usage = models.DecimalField(
+        max_digits=5, decimal_places=2, default=1,
+        help_text="Сколько единиц ингредиента расходуется на одну порцию"
+    )
+
+    class Meta:
+        db_table = "products"
+
+    def __str__(self):
+        return f"{self.name} — {self.price} сом (себестоимость: {self.cost_price} сом, прибыль: {self.profit_per_unit()} сом)"
+
+    def profit_per_unit(self):
+        if not self.price:
+            return 0
+        return round(self.price - (self.cost_price or 0), 2)
+
+    def clean(self):
+        # Ограничение на количество уникальных категорий
+        categories = Product.objects.values_list('category', flat=True).distinct()
+        if not self.pk and self.category not in categories and len(categories) >= 12:
+            raise ValidationError("Нельзя создать больше 12 категорий")
+
+        # Ограничение на количество блюд внутри одной категории
+        if not self.pk and Product.objects.filter(category=self.category).count() >= 24:
+            raise ValidationError(f"В категории «{self.category}» нельзя создать больше 24 блюд")
+
 
     class Meta:
         db_table = "products"
@@ -194,4 +233,5 @@ class DeletedItem(models.Model):
 
     def __str__(self):
         return f"{self.product_name} x{self.quantity} — удалено кассиром {self.cashier.name if self.cashier else '-'}"
+
 

@@ -8,6 +8,7 @@ from django.views.decorators.http import require_GET
 from django.db.models import Q
 from collections import defaultdict
 from decimal import Decimal
+import pytz
 from django.utils import timezone
 from datetime import datetime
 from django.http import JsonResponse
@@ -1066,6 +1067,7 @@ def remove_item_from_order(request, item_id):
 def recalc_order_total(request, order_id):
     order = get_object_or_404(Order, id=order_id)
 
+    # выбираем новые позиции (draft + new)
     new_items = order.items.filter(is_new=True, is_draft=True, cancelled=False)
 
     operator = getattr(order, "employee", None)
@@ -1082,10 +1084,26 @@ def recalc_order_total(request, order_id):
             'action': 'recalc'
         })
 
-    print_to_printer("XP-80C", order.receipt_number, order.order_time, new_items,
-                     kitchen=True, order_type="", operator_name=operator_name)
-    print_to_printer("XP-80C (copy 2)", order.receipt_number, order.order_time, new_items,
-                     kitchen=False, order_type="", operator_name=operator_name)
+    # === считаем дельту ===
+    delta_items = []
+    for item in new_items:
+        # предполагаем, что у OrderItem есть поле original_quantity (старое значение)
+        prev_qty = getattr(item, "original_quantity", 0) or 0
+        diff = (item.quantity or 0) - prev_qty
+        if diff > 0:
+            # создаём копию объекта для печати только разницы
+            item_copy = item
+            item_copy.quantity = diff
+            delta_items.append(item_copy)
+
+    # печатаем только новые блюда (дельту)
+    if delta_items:
+        print_to_printer("XP-80C", order.receipt_number, order.order_time, delta_items,
+                         kitchen=True, order_type="", operator_name=operator_name)
+        print_to_printer("XP-80C (copy 2)", order.receipt_number, order.order_time, delta_items,
+                         kitchen=False, order_type="", operator_name=operator_name)
+
+    # обновляем статус новых позиций
     new_items.update(is_new=False, is_draft=False)
 
     items, total = _recalc_and_serialize(order)
@@ -1180,19 +1198,54 @@ def order_cancel(request, order_id):
     order.save(update_fields=["status", "cancelled", "cancelled_at", "cancelled_by"])
 
     return JsonResponse({"ok": True})
+import pytz
+
+from django.http import JsonResponse
+from django.shortcuts import get_object_or_404
+from django.views.decorators.http import require_GET
+import pytz
 
 @require_GET
 def order_receipt_reprint(request, order_id):
     order = get_object_or_404(Order, id=order_id)
+    print("RAW:", order.order_time, order.order_time.tzinfo, repr(order.order_time))
+
     items = order.items.filter(cancelled=False)
     operator = getattr(order, "employee", None)
     operator_name = getattr(operator, "name", "-") if operator else "-"
+
+    # ===== FIX: перевод времени в Бишкек (UTC -> Asia/Bishkek) =====
+    tz = pytz.timezone("Asia/Bishkek")
+    order_dt = order.order_time
+    if getattr(order_dt, "tzinfo", None) is None:
+        # наивную дату трактуем как UTC и переводим в Бишкек
+        order_dt_local = pytz.utc.localize(order_dt).astimezone(tz)
+    else:
+        # aware-дата (например, UTC) -> перевод напрямую в Бишкек
+        order_dt_local = order_dt.astimezone(tz)
+
     # печать полного актуального заказа
-    print_to_printer("XP-80C (copy 16)", order.receipt_number, order.order_time, items,
-                     kitchen=True, order_type="", operator_name=operator_name)
-    print_to_printer("XP-80C (copy 2)", order.receipt_number, order.order_time, items,
-                     kitchen=False, order_type="", operator_name=operator_name)
+    print_to_printer(
+        "XP-80C (copy 16)",
+        order.receipt_number,
+        order_dt_local,
+        items,
+        kitchen=True,
+        order_type="",
+        operator_name=operator_name,
+    )
+    print_to_printer(
+        "XP-80C (copy 2)",
+        order.receipt_number,
+        order_dt_local,
+        items,
+        kitchen=False,
+        order_type="",
+        operator_name=operator_name,
+    )
+
     return JsonResponse({"ok": True})
+
 
 from django.http import JsonResponse
 from django.views.decorators.http import require_GET
@@ -1512,6 +1565,16 @@ from django.http import JsonResponse
 from django.shortcuts import get_object_or_404
 from .models import Order
 import traceback
+from django.http import JsonResponse
+from django.shortcuts import get_object_or_404
+from django.views.decorators.http import require_GET
+import pytz
+
+from django.http import JsonResponse
+from django.shortcuts import get_object_or_404
+from django.views.decorators.http import require_GET
+import pytz
+from datetime import datetime
 
 @require_GET
 def reprint_receipt_view(request, order_id):
@@ -1520,14 +1583,22 @@ def reprint_receipt_view(request, order_id):
     try:
         import win32ui
         from decimal import Decimal
-        import pytz
+        import traceback
 
+        # ===== FIX: корректное локальное время (через timestamp) =====
         tz = pytz.timezone("Asia/Bishkek")
         order_dt = order.order_time
-        if getattr(order_dt, "tzinfo", None) is None:
-            order_dt = tz.localize(order_dt)
-        else:
-            order_dt = order_dt.astimezone(tz)
+        # Преобразуем через timestamp, чтобы исключить все погрешности tzinfo
+        try:
+            ts = order_dt.timestamp()  # получает epoch в секундах (всегда в UTC)
+        except Exception:
+            # На случай старых наивных дат без tzinfo — считаем их как UTC
+            from calendar import timegm
+            if getattr(order_dt, "tzinfo", None) is None:
+                ts = timegm(order_dt.utctimetuple())
+            else:
+                ts = order_dt.timestamp()
+        order_dt_local = datetime.fromtimestamp(ts, tz)
 
         order_no = getattr(order, "receipt_number", None) or 0
         PRINTER_CLIENT = "XP-80C (copy 2)"
@@ -1597,7 +1668,8 @@ def reprint_receipt_view(request, order_id):
 
         operator = getattr(order, "employee", None)
         draw_text(pdc, x_name, y, f"Оператор: {getattr(operator, 'name', '-') if operator else '-'}"); y += line_h
-        draw_text(pdc, x_name, y, order_dt.strftime('%Y.%m.%d %H:%M:%S')); y += line_h
+        # ✅ печатаем «жёстко» вычисленное локальное время
+        draw_text(pdc, x_name, y, order_dt_local.strftime('%Y.%m.%d %H:%M:%S')); y += line_h
 
         draw_text(pdc, x_name,  y, "Наименование")
         draw_text(pdc, x_qty,   y, "К-во")
@@ -1635,6 +1707,12 @@ def reprint_receipt_view(request, order_id):
             'trace': traceback.format_exc()
         }, status=500)
 
+
+    except Exception as e:
+        return JsonResponse({
+            'error': f'Ошибка печати клиентского чека: {e}',
+            'trace': traceback.format_exc()
+        }, status=500)
 
 
 
@@ -1776,12 +1854,92 @@ import win32ui
 
 from decimal import Decimal
 import win32ui
-
-def print_to_printer(printer_name, order_no, order_dt, items, kitchen=False, order_type="", operator_name="-"):
+def print_to_printer(
+    printer_name,
+    order_no,
+    order_dt,
+    items,
+    kitchen=False,
+    order_type="",
+    operator_name="-",
+    # NEW: печатать только новые позиции (для кнопки "Пересчитать")
+    recalc=False,
+    # NEW: предыдущие количества по продуктам (dict: {product_id: prev_qty} или {product_name: prev_qty})
+    previous_quantities=None,
+    # NEW: явная локальная таймзона для корректного времени на чеке (например, "Asia/Bishkek")
+    tz_name="Asia/Bishkek",
+):
     try:
         import win32ui
         import win32print
         from decimal import Decimal
+
+        # ===== NEW: корректное локальное время на чеке =====
+        import pytz
+
+        def to_local(dt):
+            tz = pytz.timezone(tz_name)
+            # если дата наивная — считаем её UTC
+            if getattr(dt, "tzinfo", None) is None:
+                dt = pytz.utc.localize(dt)
+            # переводим из UTC (или другой aware) в явную зону чека
+            return dt.astimezone(tz)
+
+        order_dt_local = to_local(order_dt)
+
+        # ===== NEW: подготовка "дельта"-позиций для режима recalc =====
+        # Если recalc=True, печатать только НОВЫЕ количества (т.е. текущее - предыдущее, но не меньше 0)
+        # previous_quantities может быть словарём по product.id или по product.name
+        prev_map = previous_quantities or {}
+
+        def product_key(item):
+            # Надёжный ключ: id если есть, иначе name
+            pid = getattr(getattr(item, "product", None), "id", None)
+            if pid is not None:
+                return ("id", pid)
+            pname = getattr(getattr(item, "product", None), "name", None)
+            return ("name", pname or f"product_{id(item)}")
+
+        # Текущие количества по ключам
+        current_map = {}
+        for it in items:
+            key = product_key(it)
+            qty = Decimal(getattr(it, "quantity", 0) or 0)
+            current_map[key] = current_map.get(key, Decimal("0")) + qty
+
+        # Построить карту предыдущих количеств в том же формате ключей
+        normalized_prev_map = {}
+        id_to_key = {}
+        name_to_key = {}
+        for it in items:
+            k = product_key(it)
+            pid = getattr(getattr(it, "product", None), "id", None)
+            pname = getattr(getattr(it, "product", None), "name", None)
+            if pid is not None:
+                id_to_key[pid] = k
+            if pname:
+                name_to_key[pname] = k
+
+        for raw_key, prev_qty in (prev_map.items() if isinstance(prev_map, dict) else []):
+            matched_key = None
+            if isinstance(raw_key, int) and raw_key in id_to_key:
+                matched_key = id_to_key[raw_key]
+            elif isinstance(raw_key, str) and raw_key in name_to_key:
+                matched_key = name_to_key[raw_key]
+            else:
+                if isinstance(raw_key, tuple) and len(raw_key) == 2 and raw_key[0] in ("id", "name"):
+                    matched_key = raw_key
+            if matched_key is not None:
+                normalized_prev_map[matched_key] = Decimal(prev_qty or 0)
+
+        # Дельта-количества: печатаем только позитивную разницу
+        delta_map = {}
+        if recalc:
+            for k, curr_qty in current_map.items():
+                prev_qty = normalized_prev_map.get(k, Decimal("0"))
+                diff = curr_qty - prev_qty
+                if diff > 0:
+                    delta_map[k] = diff
 
         # Вспомогательная функция для звукового сигнала (ESC B n t)
         def send_beep(printer_name):
@@ -1829,16 +1987,15 @@ def print_to_printer(printer_name, order_no, order_dt, items, kitchen=False, ord
 
             y = 0
 
-            # Воздух сверху
-            for _ in range(10):
-                draw_center(pdc, y, " ", size=30)
-                y += 30
+            # Убраны пустые строки сверху
+            # top_padding_rows = 0
 
-            # Шапка кухни
+            # Шапка кухни без лишних «воздухов»
             draw_center(pdc, y, "КУХНЯ", size=48); y += 60
             draw_center(pdc, y, f"{order_type}", size=54); y += 65
             draw_center(pdc, y, f"ЗАКАЗ №{order_no}", size=64); y += 60
-            draw_center(pdc, y, order_dt.strftime('%d.%m.%Y %H:%M'), size=36); y += 45
+            # ===== FIX: правильное локальное время =====
+            draw_center(pdc, y, order_dt_local.strftime('%d.%m.%Y %H:%M'), size=36); y += 45
             draw_center(pdc, y, "--------------------", size=32); y += 40
 
             # Исключение напитков
@@ -1852,27 +2009,51 @@ def print_to_printer(printer_name, order_no, order_dt, items, kitchen=False, ord
                 "сок", "juice", "лимонад", "морс", "компот", "айран", "fuse", "fuse tea", "iced tea"
             )
 
+            # Сбор кухонных позиций с учётом recalc (печатаем только дельту, если recalc=True)
             kitchen_items = []
-            for item in items:
-                product = getattr(item, "product", None)
-                if not product:
-                    continue
+            if recalc:
+                for it in items:
+                    key = product_key(it)
+                    delta_qty = delta_map.get(key, Decimal("0"))
+                    if delta_qty <= 0:
+                        continue
+                    product = getattr(it, "product", None)
+                    if not product:
+                        continue
+                    category = getattr(product, "category", None)
+                    if isinstance(category, str):
+                        cat_name = (category or "").strip().lower()
+                    else:
+                        cat_name = (getattr(category, "name", "") or "").strip().lower()
+                    prod_name = (getattr(product, "name", "") or "").strip().lower()
 
-                category = getattr(product, "category", None)
-                if isinstance(category, str):
-                    cat_name = (category or "").strip().lower()
-                else:
-                    cat_name = (getattr(category, "name", "") or "").strip().lower()
+                    is_drink_by_category = bool(cat_name) and any(k in cat_name for k in drink_category_keywords)
+                    is_drink_by_name = bool(prod_name) and any(k in prod_name for k in drink_name_keywords)
+                    if is_drink_by_category or is_drink_by_name:
+                        continue
 
-                prod_name = (getattr(product, "name", "") or "").strip().lower()
+                    kitchen_items.append((product.name, int(delta_qty)))
+            else:
+                for item in items:
+                    product = getattr(item, "product", None)
+                    if not product:
+                        continue
 
-                is_drink_by_category = bool(cat_name) and any(k in cat_name for k in drink_category_keywords)
-                is_drink_by_name = bool(prod_name) and any(k in prod_name for k in drink_name_keywords)
+                    category = getattr(product, "category", None)
+                    if isinstance(category, str):
+                        cat_name = (category or "").strip().lower()
+                    else:
+                        cat_name = (getattr(category, "name", "") or "").strip().lower()
 
-                if is_drink_by_category or is_drink_by_name:
-                    continue
+                    prod_name = (getattr(product, "name", "") or "").strip().lower()
 
-                kitchen_items.append((product.name, item.quantity))
+                    is_drink_by_category = bool(cat_name) and any(k in cat_name for k in drink_category_keywords)
+                    is_drink_by_name = bool(prod_name) and any(k in prod_name for k in drink_name_keywords)
+
+                    if is_drink_by_category or is_drink_by_name:
+                        continue
+
+                    kitchen_items.append((product.name, int(getattr(item, "quantity", 0) or 0)))
 
             if not kitchen_items:
                 draw_center(pdc, y, "Нет блюд для кухни", size=30); y += 40
@@ -1881,6 +2062,8 @@ def print_to_printer(printer_name, order_no, order_dt, items, kitchen=False, ord
                     dish_line = f"{product_name} × {int(qty)}"
                     draw_center(pdc, y, dish_line, size=43)
                     y += 50
+
+            # Без лишних пустых строк в конце — завершаем страницу как есть
 
         else:
             # Кассовый чек
@@ -1954,6 +2137,7 @@ def print_to_printer(printer_name, order_no, order_dt, items, kitchen=False, ord
 
                 return y
 
+            # ===== FIX: используем локальное время =====
             y = 0
             # Шапка
             draw_text(pdc, x_name, y, f"ЗАКАЗ №{order_no}", font=font_order_no); y += 70
@@ -1965,7 +2149,7 @@ def print_to_printer(printer_name, order_no, order_dt, items, kitchen=False, ord
 
             # Оператор и время
             draw_text(pdc, x_name, y, f"Оператор: {operator_name}"); y += line_h
-            draw_text(pdc, x_name, y, order_dt.strftime('%Y.%m.%d %H:%M:%S')); y += line_h
+            draw_text(pdc, x_name, y, order_dt_local.strftime('%Y.%m.%d %H:%M:%S')); y += line_h
 
             # Таблица
             draw_text(pdc, x_name, y, "Наименование")
@@ -1976,12 +2160,28 @@ def print_to_printer(printer_name, order_no, order_dt, items, kitchen=False, ord
 
             # Строки и итог
             total_sum = Decimal("0")
-            for item in items:
-                qty = Decimal(item.quantity)
-                price = Decimal(item.price or item.product.price)
-                line_total = price * qty
-                total_sum += line_total
-                y = draw_row(pdc, y, item.product.name, qty, price, line_total)
+
+            if recalc:
+                used_keys = set()
+                for item in items:
+                    key = product_key(item)
+                    if key in used_keys:
+                        continue
+                    delta_qty = delta_map.get(key, Decimal("0"))
+                    if delta_qty <= 0:
+                        continue
+                    price = Decimal(getattr(item, "price", None) or getattr(getattr(item, "product", None), "price", 0) or 0)
+                    line_total = price * delta_qty
+                    total_sum += line_total
+                    y = draw_row(pdc, y, getattr(item.product, "name", "Без названия"), delta_qty, price, line_total)
+                    used_keys.add(key)
+            else:
+                for item in items:
+                    qty = Decimal(getattr(item, "quantity", 0) or 0)
+                    price = Decimal(getattr(item, "price", None) or getattr(item.product, "price", 0) or 0)
+                    line_total = price * qty
+                    total_sum += line_total
+                    y = draw_row(pdc, y, item.product.name, qty, price, line_total)
 
             # Итог
             draw_text(pdc, x_name, y, "=============================="); y += line_h
@@ -1999,8 +2199,6 @@ def print_to_printer(printer_name, order_no, order_dt, items, kitchen=False, ord
 
     except Exception as e:
         print(f"Ошибка печати ({'кухня' if kitchen else 'касса'}): {e}")
-
-
 
 
 

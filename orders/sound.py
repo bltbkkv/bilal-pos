@@ -11,16 +11,16 @@ def list_voices():
 
 def generate_voice(order):
     num = order.receipt_number or order.id
-    text = f"Заказ {num}. Подойдите к кассе."
+    text = f"Заказ {num}, Готов."
 
     engine = pyttsx3.init()
-    engine.setProperty('rate', 160)
+    engine.setProperty('rate', 145)
     engine.setProperty('volume', 1.0)
 
     # жёстко выбираем Анну
     engine.setProperty(
         'voice',
-        r"HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Speech\Voices\TokenEnums\RHVoice\Anna"
+        r"HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Speech\Voices\TokenEnums\RHVoice\Tatiana"
     )
 
     engine.say(text)
