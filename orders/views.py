@@ -1480,6 +1480,59 @@ def print_receipt_direct(order):
             x_center = (RIGHT_EDGE - margin_left) // 2 - w // 2 + margin_left
             pdc.TextOut(x_center, y, str(text))
 
+        # Перенос длинной строки с центрированием (кухонный чек)
+        def draw_center_wrap(pdc, y, text, size=43, max_width=RIGHT_EDGE - margin_left - 20):
+            font_line = win32ui.CreateFont({"name": "Consolas", "height": size, "weight": 800})
+            pdc.SelectObject(font_line)
+
+            tokens = []
+            buf = []
+            for ch in str(text):
+                if ch.isspace() or ch in "-()":
+                    if buf:
+                        tokens.append("".join(buf)); buf = []
+                    tokens.append(ch)
+                else:
+                    buf.append(ch)
+            if buf:
+                tokens.append("".join(buf))
+
+            lines = []
+            current = ""
+            i = 0
+            while i < len(tokens):
+                tok = tokens[i]
+                trial = current + tok
+                w, _ = pdc.GetTextExtent(trial)
+                if w <= max_width:
+                    current = trial
+                    i += 1
+                else:
+                    if not current.strip():
+                        cut = 1
+                        while cut <= len(tok) and pdc.GetTextExtent(tok[:cut])[0] <= max_width:
+                            cut += 1
+                        part = tok[:cut-1] if cut > 1 else tok[:1]
+                        lines.append(part)
+                        rest = tok[len(part):]
+                        if rest:
+                            tokens[i] = rest
+                        else:
+                            i += 1
+                    else:
+                        lines.append(current.strip())
+                        current = ""
+            if current.strip():
+                lines.append(current.strip())
+
+            for line in lines:
+                w, _ = pdc.GetTextExtent(line)
+                x_center = (RIGHT_EDGE - margin_left) // 2 - w // 2 + margin_left
+                pdc.TextOut(x_center, y, line)
+                y += size  # шаг соответствует высоте шрифта
+
+            return y
+
         # Отступ сверху
         for _ in range(10):
             draw_center(pdc, y, " ", size=30)
@@ -1505,7 +1558,7 @@ def print_receipt_direct(order):
             "сок", "juice", "лимонад", "морс", "компот", "fuse", "iced tea",  "чай", "каппучино", "макаронсы", "реми", "мороженое", "коробка", "сырный", "чесночный", "кисло-сладкий", "кетчуп", "барбекью", "биг", "халапеньо","кофе"
         )
 
-        # Вывод блюд напрямую
+        # Вывод блюд напрямую (с переносом длинных строк)
         has_items = False
         for item in order.items.filter(cancelled=False):
             product = getattr(item, "product", None)
@@ -1528,8 +1581,8 @@ def print_receipt_direct(order):
 
             has_items = True
             dish_line = f"{product.name} × {int(item.quantity)}"
-            draw_center(pdc, y, dish_line, size=43)
-            y += 50
+            y = draw_center_wrap(pdc, y, dish_line, size=43)
+            y += 10  # небольшой отступ между блюдами
 
         if not has_items:
             draw_center(pdc, y, "Нет блюд для кухни", size=30); y += 40
@@ -1539,7 +1592,6 @@ def print_receipt_direct(order):
         pdc.DeleteDC()
     except Exception as e:
         print(f"Ошибка печати кухонного чека: {e}")
-
 
 
 

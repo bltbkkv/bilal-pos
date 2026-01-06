@@ -120,21 +120,26 @@
       cell.style.cursor = 'pointer';
     }
 
-    function setCellOrder(cell, order) {
-      cell.dataset.orderId = order.id;
-      cell.className = 'order-cell active';
-      cell.querySelector('.order-label').textContent = 'Заказ №' + order.receipt_number;
-      cell.querySelector('.order-name').textContent = order.note || '';
-      const actions = cell.querySelector('.cell-actions');
-      cell.onclick = () => window.location.href = `/orders/${order.id}/edit/`;
-      cell.style.cursor = 'pointer';
+function setCellOrder(cell, order) {
+  cell.dataset.orderId = order.id;
 
-      actions.innerHTML = '';
-      const btn = document.createElement('button');
-      btn.textContent = '❓';
-      btn.onclick = (e) => { e.stopPropagation(); toggleProblem(null, order.id); };
-      actions.appendChild(btn);
-    }
+  // 👇 Учитываем статус оплаты
+  const statusClass = order.is_paid ? 'active' : 'problem';
+  cell.className = 'order-cell ' + statusClass;
+
+  cell.querySelector('.order-label').textContent = 'Заказ №' + order.receipt_number;
+  cell.querySelector('.order-name').textContent = order.note || '';
+  const actions = cell.querySelector('.cell-actions');
+  cell.onclick = () => window.location.href = `/orders/${order.id}/edit/`;
+  cell.style.cursor = 'pointer';
+
+  actions.innerHTML = '';
+  const btn = document.createElement('button');
+  btn.textContent = '❓';
+  btn.onclick = (e) => { e.stopPropagation(); toggleProblem(null, order.id); };
+  actions.appendChild(btn);
+}
+
   </script>
 </head>
 <body>
