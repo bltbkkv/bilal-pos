@@ -21,7 +21,7 @@ def generate_voice(order):
 
 
     engine = pyttsx3.init()
-    engine.setProperty('rate', 180)
+    engine.setProperty('rate', 145)
     engine.setProperty('volume', 1.0)
 
     # жёстко выбираем Анну

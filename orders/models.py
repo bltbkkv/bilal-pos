@@ -62,15 +62,14 @@ class Product(models.Model):
         return round(self.price - (self.cost_price or 0), 2)
 
     def clean(self):
-        # Ограничение на количество уникальных категорий
-        categories = Product.objects.values_list('category', flat=True).distinct()
+        # Ограничение на количество уникальных категорий (только активные)
+        categories = Product.objects.filter(is_active=True).values_list('category', flat=True).distinct()
         if not self.pk and self.category not in categories and len(categories) >= 12:
             raise ValidationError("Нельзя создать больше 12 категорий")
 
-        # Ограничение на количество блюд внутри одной категории
-        if not self.pk and Product.objects.filter(category=self.category).count() >= 24:
+        # Ограничение на количество блюд внутри одной категории (только активные)
+        if not self.pk and Product.objects.filter(category=self.category, is_active=True).count() >= 24:
             raise ValidationError(f"В категории «{self.category}» нельзя создать больше 24 блюд")
-
 
     class Meta:
         db_table = "products"

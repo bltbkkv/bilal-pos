@@ -86,6 +86,7 @@ path("print/cancelled/", views.print_cancelled_receipt, name="print_cancelled_re
 path('orders/<int:order_id>/discard-draft/', views.discard_draft, name='discard_draft'),
 
 
+path("orders/<int:order_id>/delivery/", views.mark_delivery, name="mark_delivery"),
 
 
 

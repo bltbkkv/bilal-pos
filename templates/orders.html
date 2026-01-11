@@ -46,9 +46,10 @@
       user-select: none;
       font-size: 12px;
     }
-    .order-cell.empty  { background: #6c757d; }
-    .order-cell.active { background: #28a745; }
-    .order-cell.problem{ background: #dc3545; }
+    .order-cell.empty    { background: #6c757d; }
+    .order-cell.active   { background: #28a745; }
+    .order-cell.problem  { background: #dc3545; }
+    .order-cell.delivery { background: #ffc107; color: black; }
 
     .order-label { font-size: 14px; font-weight: bold; margin-bottom: 2px; line-height: 1.2; }
     .order-name  { font-size: 12px; margin: 2px 0; line-height: 1.2; }
@@ -105,7 +106,7 @@
       }
       const cell = document.querySelector(`.order-cell[data-order-id="${orderId}"]`);
       if (cell) {
-        cell.classList.remove('active', 'problem', 'empty');
+        cell.classList.remove('active', 'problem', 'empty', 'delivery');
         cell.classList.add(data.is_paid ? 'active' : 'problem');
       }
     }
@@ -120,26 +121,29 @@
       cell.style.cursor = 'pointer';
     }
 
-function setCellOrder(cell, order) {
-  cell.dataset.orderId = order.id;
+    function setCellOrder(cell, order) {
+      cell.dataset.orderId = order.id;
 
-  // 👇 Учитываем статус оплаты
-  const statusClass = order.is_paid ? 'active' : 'problem';
-  cell.className = 'order-cell ' + statusClass;
+      let statusClass;
+      if (order.order_type === 'delivery') {
+        statusClass = 'delivery';   // оранжевый
+      } else {
+        statusClass = order.is_paid ? 'active' : 'problem';
+      }
+      cell.className = 'order-cell ' + statusClass;
 
-  cell.querySelector('.order-label').textContent = 'Заказ №' + order.receipt_number;
-  cell.querySelector('.order-name').textContent = order.note || '';
-  const actions = cell.querySelector('.cell-actions');
-  cell.onclick = () => window.location.href = `/orders/${order.id}/edit/`;
-  cell.style.cursor = 'pointer';
+      cell.querySelector('.order-label').textContent = 'Заказ №' + order.receipt_number;
+      cell.querySelector('.order-name').textContent = order.note || '';
+      const actions = cell.querySelector('.cell-actions');
+      cell.onclick = () => window.location.href = `/orders/${order.id}/edit/`;
+      cell.style.cursor = 'pointer';
 
-  actions.innerHTML = '';
-  const btn = document.createElement('button');
-  btn.textContent = '❓';
-  btn.onclick = (e) => { e.stopPropagation(); toggleProblem(null, order.id); };
-  actions.appendChild(btn);
-}
-
+      actions.innerHTML = '';
+      const btn = document.createElement('button');
+      btn.textContent = '❓';
+      btn.onclick = (e) => { e.stopPropagation(); toggleProblem(null, order.id); };
+      actions.appendChild(btn);
+    }
   </script>
 </head>
 <body>
@@ -172,6 +176,7 @@ function setCellOrder(cell, order) {
           receipt_number: {{ order.receipt_number }},
           total: {{ order.total }},
           is_paid: {{ order.is_paid|yesno:"true,false" }},
+          order_type: "{{ order.order_type|default_if_none:'' }}",
           note: "{{ order.note|default_if_none:''|escapejs }}"
         }{% if not forloop.last %},{% endif %}
         {% endfor %}
@@ -190,4 +195,6 @@ function setCellOrder(cell, order) {
   </div>
 </body>
 </html>
+
+
 

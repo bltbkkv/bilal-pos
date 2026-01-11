@@ -80,14 +80,11 @@ WSGI_APPLICATION = 'config.wsgi.application'
 
 DATABASES = {
     'default': {
-        'ENGINE': 'django.db.backends.mysql',
-        'NAME': 'Bilal_test',   # твоя база
-        'USER': 'root',         # твой пользователь
-        'PASSWORD': '10101010',   # твой пароль
-        'HOST': '127.0.0.1',
-        'PORT': '3306',
+        'ENGINE': 'django.db.backends.sqlite3',
+        'NAME': BASE_DIR / 'db.sqlite3',  # путь к файлу базы
     }
 }
+
 
 
 # Password validation
