@@ -106,7 +106,7 @@ def print_receipt_view(request, order_id):
     order = get_object_or_404(Order, id=order_id)
 
 
-    PRINTER_CASH = "XP-80C (copy 2)"   # кассовый принтер
+    PRINTER_CASH = "XP-80"   # кассовый принтер
     PRINTER_KITCHEN = "XP-80C (copy 1)"  # кухонный (можно указать другой, если есть)
 
     def _print_on_printer(printer_name, items_filter=None):
@@ -650,7 +650,7 @@ def report_receipt(request):
     import win32ui
     from datetime import datetime
 
-    PRINTER_NAME = "XP-80C (copy 2)"
+    PRINTER_NAME = "XP-80"
 
     start_date = request.GET.get('start')
     end_date = request.GET.get('end')
@@ -934,13 +934,10 @@ def add_item_to_order(request, order_id):
 
     existing = order.items.filter(product=product, cancelled=False).first()
     if existing:
-        # ⚡ фиксируем исходное количество только один раз
-        if existing.original_quantity is None or existing.original_quantity == 0:
-            existing.original_quantity = existing.quantity
+        # ⚡ не трогаем original_quantity, оно фиксируется только при создании
         existing.quantity += qty
-        existing.is_new = True
         existing.is_draft = True
-        existing.save(update_fields=["quantity", "is_new", "is_draft", "original_quantity"])
+        existing.save(update_fields=["quantity", "is_draft"])
     else:
         OrderItem.objects.create(
             order=order,
@@ -949,9 +946,9 @@ def add_item_to_order(request, order_id):
             price=product.price,
             options=[],
             cancelled=False,
-            is_new=True,
+            is_new=True,          # новое блюдо
             is_draft=True,
-            original_quantity=0,  # для новых позиций baseline = 0
+            original_quantity=0,  # baseline = 0
         )
 
     order.is_paid = False
@@ -959,6 +956,7 @@ def add_item_to_order(request, order_id):
 
     items, total = _recalc_and_serialize(order)
     return JsonResponse({'ok': True, 'items': items, 'total': total})
+
 
 
 # views.py
@@ -1066,14 +1064,15 @@ def reduce_item_quantity(request, item_id):
 @csrf_exempt
 @require_POST
 def remove_item_from_order(request, item_id):
+    item = get_object_or_404(OrderItem, id=item_id)
     emp_id = request.session.get("employee_id")
     emp = Employee.objects.filter(id=emp_id).first()
 
-    item = get_object_or_404(OrderItem, id=item_id)
+
     if not item.is_draft:
         item.original_quantity = item.quantity
 
-    # сразу фиксируем отмену
+    # фиксируем отмену
     item.quantity = 0
     item.is_new = False
     item.is_draft = False
@@ -1132,29 +1131,33 @@ def recalc_order_total(request, order_id):
         final_diff = max(0, cur_qty - prev_qty)
 
         to_print = 0
-        if pid in edit_ops:
-            added = edit_ops[pid]["added"]
-            if final_diff > 0:
-                to_print = max(0, min(added, final_diff))
-            else:
-                # если разница = 0, но были добавления — печатаем их
-                if added > 0:
-                    to_print = added
+        # 🔹 новое блюдо → печатаем всё количество
+        if it.is_new and (it.original_quantity or 0) == 0:
+            to_print = cur_qty
         else:
-            to_print = final_diff
+            if pid in edit_ops:
+                added = edit_ops[pid]["added"]
+                if final_diff > 0:
+                    to_print = max(0, min(added, final_diff))
+                elif added > 0:
+                    to_print = added
+            else:
+                to_print = final_diff
 
         if to_print > 0:
             it_copy = it
             it_copy.quantity = to_print
             delta_items.append(it_copy)
 
-        # 🔹 Отладка по каждой позиции
-        print(f"DEBUG item {pid}: cur={cur_qty}, prev={prev_qty}, diff={final_diff}, to_print={to_print}")
+        print(
+            f"DEBUG item {pid}: cur={cur_qty}, prev={prev_qty}, diff={final_diff}, "
+            f"to_print={to_print}, is_new={getattr(it, 'is_new', False)}"
+        )
 
     # печать
     if delta_items:
         print_to_printer(
-            "XP-80C (copy 2)",
+            "XP-80C (copy 1)",
             order.receipt_number,
             order.order_time,
             delta_items,
@@ -1166,7 +1169,7 @@ def recalc_order_total(request, order_id):
             edit_ops=edit_ops
         )
         print_to_printer(
-            "XP-80C (copy 2)",
+            "XP-80",
             order.receipt_number,
             order.order_time,
             delta_items,
@@ -1178,10 +1181,11 @@ def recalc_order_total(request, order_id):
             edit_ops=edit_ops
         )
 
-    # обновляем baseline
+    # 🔹 обновляем baseline и сбрасываем is_new
     for it in order.items.filter(cancelled=False):
         it.original_quantity = it.quantity
-        it.save(update_fields=["original_quantity"])
+        it.is_new = False
+        it.save(update_fields=["original_quantity", "is_new"])
     request.session['baseline'] = {
         str(it.product.id): int(it.quantity or 0)
         for it in order.items.filter(cancelled=False).select_related('product')
@@ -1196,8 +1200,6 @@ def recalc_order_total(request, order_id):
         'total': total,
         'action': 'recalc'
     })
-
-
 
 def _recalc_and_serialize(order):
     items = []
@@ -1245,7 +1247,7 @@ def order_cancel(request, order_id):
     # печать чека отмены (до изменения флагов)
     if cancelled_items.exists():
         print_to_printer(
-            "XP-80C (copy 2)",
+            "XP-80C (copy 1)",
             order.receipt_number,
             order.order_time,
             cancelled_items,
@@ -1254,7 +1256,7 @@ def order_cancel(request, order_id):
             operator_name=emp.name if emp else "-"
         )
         print_to_printer(
-            "XP-80C (copy 2)",
+            "XP-80",
             order.receipt_number,
             order.order_time,
             cancelled_items,
@@ -1305,27 +1307,87 @@ def order_receipt_reprint(request, order_id):
         # aware-дата (например, UTC) -> перевод напрямую в Бишкек
         order_dt_local = order_dt.astimezone(tz)
 
+    # 🔹 Функция для переноса длинных названий (как в print_receipt_direct)
+    def draw_row(pdc, y, name, qty, price, total,
+                 x_name, x_qty, x_price, x_total, line_h, font_bold):
+        pdc.SelectObject(font_bold)
+        max_width = x_qty - x_name - 10
+        text = str(name)
+
+        # Разбиваем на токены (по пробелам, дефисам, скобкам)
+        tokens, buf = [], []
+        for ch in text:
+            if ch.isspace() or ch in "-()":
+                if buf:
+                    tokens.append("".join(buf)); buf = []
+                tokens.append(ch)
+            else:
+                buf.append(ch)
+        if buf:
+            tokens.append("".join(buf))
+
+        lines, current, i = [], "", 0
+        while i < len(tokens):
+            tok = tokens[i]
+            trial = current + tok
+            w, _ = pdc.GetTextExtent(trial)
+            if w <= max_width:
+                current = trial
+                i += 1
+            else:
+                if not current.strip():
+                    # режем слишком длинное слово посимвольно
+                    cut = 1
+                    while cut <= len(tok) and pdc.GetTextExtent(tok[:cut])[0] <= max_width:
+                        cut += 1
+                    part = tok[:cut-1] if cut > 1 else tok[:1]
+                    lines.append(part)
+                    rest = tok[len(part):]
+                    if rest:
+                        tokens[i] = rest
+                    else:
+                        i += 1
+                else:
+                    lines.append(current.strip())
+                    current = ""
+        if current.strip():
+            lines.append(current.strip())
+
+        # 🔹 Название (в несколько строк)
+        for idx, line in enumerate(lines):
+            pdc.TextOut(x_name, y, line)
+            if idx == 0:
+                # только на первой строке выводим цифры
+                pdc.TextOut(x_qty,   y, f"{int(qty)}")
+                pdc.TextOut(x_price, y, f"{int(price)}")
+                pdc.TextOut(x_total, y, f"{int(total)}")
+            y += line_h
+
+        return y
+
     # печать полного актуального заказа
     print_to_printer(
-        "XP-80C (copy 2)",
+        "XP-123",
         order.receipt_number,
         order_dt_local,
         items,
         kitchen=True,
         order_type="",
-        operator_name=operator_name,
+        operator_name=operator_name,  # передаём функцию в печать
     )
     print_to_printer(
-        "XP-80C (copy 2)",
+        "XP-80",
         order.receipt_number,
         order_dt_local,
         items,
         kitchen=False,
         order_type="",
-        operator_name=operator_name,
+        operator_name=operator_name,  # передаём функцию в печать
     )
 
     return JsonResponse({"ok": True})
+
+
 
 
 from django.http import JsonResponse
@@ -1363,8 +1425,8 @@ def print_receipt_direct(order):
     order_no = getattr(order, "receipt_number", None) or getattr(order, "number", None) or 0
 
     # Имена принтеров
-    PRINTER_CLIENT = "XP-80C (copy 2)"
-    PRINTER_KITCHEN = "XP-80C (copy 2)"
+    PRINTER_CLIENT = "XP-80"
+    PRINTER_KITCHEN = "XP-80C (copy 1)"
 
     # Тип заказа (определим из позиций)
     order_type = ""
@@ -1542,7 +1604,7 @@ def print_receipt_direct(order):
         except Exception as e:
             print(f"Ошибка отправки Beep: {e}")
 
-    # ===== Кухонный чек (ориентация только по категории "Чай Кофе") =====
+    # ===== Кухонный чек (исключаем ряд категорий) =====
     try:
         # Собираем позиции с их категориями
         kitchen_items = []
@@ -1564,16 +1626,27 @@ def print_receipt_direct(order):
         if not kitchen_items:
             return
 
-        # Если ВСЕ позиции из категории "чай кофе" — не печатаем
-        excluded_categories = {"чай кофе", "горячие самсы", "десерты"}
+        # Категории, которые исключаем из кухонного чека
+        excluded_categories = {
+            "чай кофе",
+            "горячие самсы",
+            "десерты",
+            "горячие напитки",
+            "напитки",
+            "соус",
+            "макаронсы",
+        }
 
+        # Если все позиции из исключаемых — не печатаем
         if all(cat in excluded_categories for _, _, cat in kitchen_items):
             return
 
-        # Печатаем ТОЛЬКО позиции, которые НЕ из "чай кофе"
-        printable_items = [(name, qty) for name, qty, cat in kitchen_items if cat != "чай кофе"]
+        # Печатаем только позиции, которые НЕ входят в исключаемые категории
+        printable_items = [
+            (name, qty) for name, qty, cat in kitchen_items
+            if cat not in excluded_categories
+        ]
         if not printable_items:
-            # На случай, если фильтрация дала пусто
             return
 
         # Печать кухонного чека
@@ -1603,7 +1676,7 @@ def print_receipt_direct(order):
         draw_center_kitchen(pdc, y, order_dt.strftime('%d.%m.%Y %H:%M'), size=36); y += 45
         draw_center_kitchen(pdc, y, FULL_LINE, size=32); y += 40
 
-        # Печать блюд (только не "чай кофе")
+        # Печать блюд (только те, которые не из исключаемых категорий)
         for name, qty in printable_items:
             draw_center_kitchen(pdc, y, f"{name} × {qty}", size=43)
             y += 50
@@ -1613,8 +1686,6 @@ def print_receipt_direct(order):
         pdc.DeleteDC()
     except Exception as e:
         print(f"Ошибка печати кухонного чека: {e}")
-
-
 
 
 
@@ -1653,6 +1724,8 @@ def reprint_receipt_view(request, order_id):
         import win32ui
         from decimal import Decimal
         import traceback
+        from datetime import datetime
+        import pytz
 
         # ===== FIX: корректное локальное время (через timestamp) =====
         tz = pytz.timezone("Asia/Bishkek")
@@ -1668,7 +1741,7 @@ def reprint_receipt_view(request, order_id):
         order_dt_local = datetime.fromtimestamp(ts, tz)
 
         order_no = getattr(order, "receipt_number", None) or 0
-        PRINTER_CLIENT = "XP-80C (copy 2)"
+        PRINTER_CLIENT = "XP-80"
 
         # Шрифты
         font_bold = win32ui.CreateFont({"name": "Consolas", "height": 28, "weight": 800, "charset": 204})
@@ -1705,6 +1778,10 @@ def reprint_receipt_view(request, order_id):
             pdc.TextOut(x_center, y, s)
 
         def draw_row(pdc, y, name, qty, price, total):
+            """
+            Рисует строку: сначала название (с переносом),
+            затем на новой строке количество, цену и сумму.
+            """
             pdc.SelectObject(font_bold)
             max_width = x_qty - x_name - 10
             words = str(name).split(" ")
@@ -1723,13 +1800,16 @@ def reprint_receipt_view(request, order_id):
             if current:
                 lines.append(current)
 
-            for i, line in enumerate(lines):
+            # 🔹 Рисуем название (в несколько строк)
+            for line in lines:
                 draw_text(pdc, x_name, y, line)
-                if i == 0:
-                    draw_text(pdc, x_qty,   y, f"{int(qty)}")
-                    draw_text(pdc, x_price, y, f"{int(price)}")
-                    draw_text(pdc, x_total, y, f"{int(total)}")
                 y += line_h
+
+            # 🔹 Рисуем цифры на новой строке
+            draw_text(pdc, x_qty,   y, f"{int(qty)}")
+            draw_text(pdc, x_price, y, f"{int(price)}")
+            draw_text(pdc, x_total, y, f"{int(total)}")
+            y += line_h
 
             return y
 
@@ -1781,6 +1861,14 @@ def reprint_receipt_view(request, order_id):
         pdc.DeleteDC()
 
         return JsonResponse({'ok': True, 'reprinted': True})
+
+    except Exception as e:
+        import traceback
+        return JsonResponse({
+            'error': f'Ошибка печати клиентского чека: {e}',
+            'trace': traceback.format_exc()
+        }, status=500)
+
 
     except Exception as e:
         import traceback
@@ -2006,6 +2094,63 @@ def print_to_printer(
         except Exception as e:
             print(f"Ошибка Beep: {e}")
 
+    # 🔹 Перенос длинных названий (как в print_receipt_direct)
+    def draw_row(pdc, y, name, qty, price, total):
+        font_line = win32ui.CreateFont({"name": "Consolas", "height": 28, "weight": 800})
+        pdc.SelectObject(font_line)
+        max_width = x_qty - x_name - 10
+        text = str(name)
+
+        # Разбиваем на токены (по пробелам, дефисам, скобкам)
+        tokens, buf = [], []
+        for ch in text:
+            if ch.isspace() or ch in "-()":
+                if buf:
+                    tokens.append("".join(buf)); buf = []
+                tokens.append(ch)
+            else:
+                buf.append(ch)
+        if buf:
+            tokens.append("".join(buf))
+
+        lines, current, i = [], "", 0
+        while i < len(tokens):
+            tok = tokens[i]
+            trial = current + tok
+            w, _ = pdc.GetTextExtent(trial)
+            if w <= max_width:
+                current = trial
+                i += 1
+            else:
+                if not current.strip():
+                    # режем слишком длинный токен посимвольно
+                    cut = 1
+                    while cut <= len(tok) and pdc.GetTextExtent(tok[:cut])[0] <= max_width:
+                        cut += 1
+                    part = tok[:cut-1] if cut > 1 else tok[:1]
+                    lines.append(part)
+                    rest = tok[len(part):]
+                    if rest:
+                        tokens[i] = rest
+                    else:
+                        i += 1
+                else:
+                    lines.append(current.strip())
+                    current = ""
+        if current.strip():
+            lines.append(current.strip())
+
+        # Печать названия в несколько строк; цифры — только на первой
+        for idx, line in enumerate(lines):
+            pdc.TextOut(x_name, y, line)
+            if idx == 0:
+                pdc.TextOut(x_qty,   y, f"{int(qty)}")
+                pdc.TextOut(x_price, y, f"{int(price)}")
+                pdc.TextOut(x_total, y, f"{int(total)}")
+            y += line_h
+
+        return y
+
     pdc = None
     started_doc = False
     started_page = False
@@ -2021,7 +2166,13 @@ def print_to_printer(
 
         # ===== КУХНЯ =====
         if kitchen:
-            excluded_categories = {"чай кофе"}
+            excluded_categories = {
+                "чай кофе",
+                "горячие напитки",
+                "напитки",
+                "соус",
+                "макаронсы",
+            }
             kitchen_items = []
 
             for it in items:
@@ -2094,11 +2245,8 @@ def print_to_printer(
             total_sum += line_total
 
             name = getattr(getattr(it, "product", None), "name", "Без названия")
-            draw_text(pdc, x_name, y, name, size=28)
-            draw_text(pdc, x_qty, y, f"{int(qty)}", size=28)
-            draw_text(pdc, x_price, y, f"{int(price)}", size=28)
-            draw_text(pdc, x_total, y, f"{int(line_total)}", size=28)
-            y += line_h
+            # Используем перенос строк
+            y = draw_row(pdc, y, name, qty, price, line_total)
 
         draw_center(pdc, y, FULL_LINE, size=28); y += line_h
         draw_text(pdc, x_name, y, "ИТОГО:", size=72)
@@ -2128,6 +2276,7 @@ def print_to_printer(
                 pdc.DeleteDC()
         except Exception:
             pass
+
 
 
 # ===== Хелперы =====
@@ -2163,10 +2312,10 @@ def recalc_order_view(request, order_id):
             return JsonResponse({'ok': True, 'msg': 'Изменений нет', 'items': [], 'total': order.total})
 
         # печать на кухню
-        print_to_printer("XP-80C (copy 2)", order.receipt_number, order.order_time, new_items, kitchen=True)
+        print_to_printer("XP-80", order.receipt_number, order.order_time, new_items, kitchen=True)
 
         # печать на кассу
-        print_to_printer("XP-80C (copy 2)", order.receipt_number, order.order_time, new_items, kitchen=False)
+        print_to_printer("XP-80C (copy 1)", order.receipt_number, order.order_time, new_items, kitchen=False)
 
         # сбрасываем флаг is_new
         new_items.update(is_new=False)
@@ -2240,7 +2389,7 @@ def print_cancelled_receipt(request):
         items_by_order[it.order_id].append(it)
 
     # Печать
-    printer_name = "XP-80C (copy 2)"
+    printer_name = "XP-80"
     pdc = win32ui.CreateDC()
     pdc.CreatePrinterDC(printer_name)
     pdc.StartDoc("Отменённые заказы и блюда")

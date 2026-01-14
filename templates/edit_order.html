@@ -159,7 +159,9 @@
             <div>{{ it.product.name }} × {{ it.quantity }} — {{ it.line_total }} сом</div>
             <div style="display:flex; gap:8px;">
               <button class="btn btn-small btn-primary" onclick="decreaseItemQuantity({{ it.id }}, {{ it.quantity }})">−</button>
-              <button class="btn btn-small btn-danger" onclick="removeItem({{ it.id }})">Удалить</button>
+              <button onclick="removeItem({{ it.id }})">Удалить</button>
+
+
             </div>
           </div>
         {% endfor %}
@@ -177,7 +179,7 @@
 <!-- Под Пересчитать располагаем Отменить и Готово -->
 <div style="margin-top:50px; display:flex; justify-content:flex-start; gap:80px; flex-wrap:wrap;">
   <button class="btn btn-green btn-large" onclick="openPaymentModal({{ order.id }}, {{ order.total }})">✅ Готово</button>
-  <button class="btn btn-danger" onclick="openDeleteModal('заказ', '/orders/{{ order.id }}/cancel/')">Удалить заказ</button>
+  <button class="btn btn-danger" onclick="cancelOrder({{ order.id }})">Удалить заказ</button>
   <button class="btn btn-warning btn-large" onclick="markDelivery({{ order.id }})">🚚 Доставка</button>
 </div>
 
@@ -258,19 +260,46 @@
       if (firstTab) firstTab.style.display = 'block';
     });
 
-    async function addItem(orderId, productId) {
-      const resp = await fetch(`/orders/${orderId}/add-item/`, {
-        method: 'POST',
-        headers: {
-          'Content-Type':'application/json',
-          'X-CSRFToken': csrftoken
-        },
-        body: JSON.stringify({product_id: productId, qty: 1})
-      });
-      const data = await resp.json();
-      if (!data.ok) { alert(data.error || 'Ошибка добавления'); return; }
-      redrawItems(data.items, data.total);
-    }
+async function addItem(orderId, productId) {
+  flagChanged();
+
+  // читаем текущее количество из DOM
+  const currentItems = readCurrentItemsFromDOM();
+  const curQty = (currentItems[productId] || 0) + 1;
+
+  if (!editOps[productId]) {
+    editOps[productId] = { added: 0, removed: 0 };
+  }
+
+  if (!baseline.hasOwnProperty(productId)) {
+    // 🔹 новое блюдо → печатаем всё количество
+    editOps[productId].added = curQty;
+  } else {
+    // 🔹 старое блюдо → печатаем только прирост
+    editOps[productId].added += 1;
+  }
+
+  console.log("DEBUG editOps:", JSON.stringify(editOps));
+
+  const resp = await fetch(`/orders/${orderId}/add-item/`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'X-CSRFToken': csrftoken
+    },
+    body: JSON.stringify({ product_id: productId, qty: 1 })
+  });
+
+  const data = await resp.json();
+  if (!data.ok) {
+    alert(data.error || 'Ошибка добавления');
+    return;
+  }
+
+  redrawItems(data.items, data.total);
+
+  // ⚠️ baseline обновлять сразу не нужно — он должен обновляться только после пересчёта (recalc)
+}
 
     function reduceItem(itemId, newQty, orderId) {
       fetch(`/orders/${itemId}/reduce_item_quantity/`, {
@@ -286,19 +315,22 @@
       });
     }
 
-    // ✅ Оставляем одну функцию removeItem, принимающую orderId и itemId
-    function removeItem(orderId, itemId) {
-      fetch(`/orders/${itemId}/remove_item_from_order/`, {
-        method: "POST",
-        headers: { "X-CSRFToken": csrftoken }
-      })
-      .then(res => res.json())
-      .then(data => {
-        if (data.ok) {
-          recalcOrderTotal(orderId);
-        }
-      });
+function removeItem(itemId) {
+  fetch(`/order-items/${itemId}/remove/`, {
+    method: "POST",
+    headers: { "X-CSRFToken": csrftoken }
+  })
+  .then(res => res.json())
+  .then(data => {
+    if (data.ok) {
+      redrawItems(data.items, data.total);
     }
+  });
+}
+
+
+
+
 
     function recalcOrderTotal(orderId) {
       fetch(`/orders/${orderId}/recalc_order_total/`, {
@@ -329,40 +361,54 @@
       redrawItems(data.items, data.total);
     }
 
-    // Пересчитать: обновить заказ, напечатать чеки и вернуть во вкладку "Заказы"
-    async function recalc(orderId) {
-      try {
-        const resp = await fetch(`/orders/${orderId}/recalc/`, {
-          method: 'POST',
-          headers: {'X-CSRFToken': csrftoken}
-        });
-        const data = await resp.json();
+async function recalc(orderId) {
+  try {
+    const resp = await fetch(`/orders/${orderId}/recalc/`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-CSRFToken': csrftoken
+      },
+      body: JSON.stringify({ edit_ops: editOps }) // передаём editOps
+    });
 
-        if (!data.ok) {
-          notify('Ошибка пересчёта', 'error');
-          setTimeout(() => { window.location.href = "/orders/"; }, 800);
-          return;
-        }
+    const data = await resp.json();
 
-        if (data.items && data.total !== undefined) {
-          redrawItems(data.items, data.total);
-        }
-
-        if (data.recalc) {
-          notify('🖨️ Чек с изменениями напечатан!');
-        } else {
-          notify('Изменений нет');
-        }
-
-        setTimeout(() => {
-          window.location.href = "/orders/";
-        }, 900);
-
-      } catch (e) {
-        notify('Ошибка сети при пересчёте', 'error');
-        setTimeout(() => { window.location.href = "/orders/"; }, 900);
-      }
+    if (!data.ok) {
+      notify('Ошибка пересчёта', 'error');
+      setTimeout(() => { window.location.href = "/orders/"; }, 800);
+      return;
     }
+
+    if (data.items && data.total !== undefined) {
+      redrawItems(data.items, data.total);
+
+      // 🔹 обновляем baseline на фронте после успешного пересчёта
+      baseline = {};
+      data.items.forEach(it => {
+        baseline[it.id] = it.quantity;
+      });
+    }
+
+    if (data.recalc) {
+      notify('🖨️ Чек с изменениями напечатан!');
+    } else {
+      notify('Изменений нет');
+    }
+
+    // сбрасываем флаг и editOps
+    hasChanges = false;
+    editOps = {};
+
+    setTimeout(() => {
+      window.location.href = "/orders/";
+    }, 900);
+  } catch (e) {
+    notify('Ошибка сети при пересчёте', 'error');
+    setTimeout(() => { window.location.href = "/orders/"; }, 900);
+  }
+}
+
 
     function redrawItems(items, total) {
       const list = document.getElementById('order-items');
@@ -376,7 +422,7 @@
           <div>${it.name} × ${it.quantity} — ${it.line_total} сом</div>
           <div style="display:flex; gap:8px;">
             <button class="btn btn-small btn-primary" onclick="decreaseItemQuantity(${it.id}, ${it.quantity})">−</button>
-            <button class="btn btn-small btn-danger" onclick="removeItem(${it.order_id}, ${it.id})">Удалить</button>
+            <button class="btn btn-small btn-danger" onclick="removeItem(${it.id})">Удалить</button>
           </div>
         `;
         list.appendChild(row);
@@ -526,8 +572,15 @@ function computeDiffs(current) {
 function flagChanged() { hasChanges = true; }
 
 // Встраиваем флаг в существующие операции
+let editOps = {};
+
 async function addItem(orderId, productId) {
   flagChanged();
+  if (!editOps[productId]) {
+    editOps[productId] = { added: 0, removed: 0 };
+  }
+  editOps[productId].added += 1; // фиксируем каждое добавление
+
   const resp = await fetch(`/orders/${orderId}/add-item/`, {
     method: 'POST',
     headers: { 'Content-Type':'application/json', 'X-CSRFToken': csrftoken },
@@ -537,6 +590,7 @@ async function addItem(orderId, productId) {
   if (!data.ok) { alert(data.error || 'Ошибка добавления'); return; }
   redrawItems(data.items, data.total);
 }
+
 
 async function removeItem(itemId) {
   flagChanged();
@@ -588,7 +642,14 @@ async function goBack() {
 // Если после пересчёта ты считаешь изменения сохранёнными — сбрось флаг
 async function recalc(orderId) {
   try {
-    const resp = await fetch(`/orders/${orderId}/recalc/`, { method: 'POST', headers: {'X-CSRFToken': csrftoken} });
+    const resp = await fetch(`/orders/${orderId}/recalc/`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-CSRFToken': csrftoken
+      },
+      body: JSON.stringify({ edit_ops: editOps }) // ✅ передаём editOps
+    });
     const data = await resp.json();
 
     if (!data.ok) {
@@ -607,9 +668,13 @@ async function recalc(orderId) {
       notify('Изменений нет');
     }
 
+    // ✅ после успешного пересчёта сбрасываем флаг и editOps
     hasChanges = false;
+    editOps = {};
 
-    setTimeout(() => { window.location.href = "/orders/"; }, 900);
+    setTimeout(() => {
+      window.location.href = "/orders/";
+    }, 900);
   } catch (e) {
     notify('Ошибка сети при пересчёте', 'error');
     setTimeout(() => { window.location.href = "/orders/"; }, 900);

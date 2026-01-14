@@ -2,7 +2,7 @@
 import win32ui
 from datetime import datetime
 
-PRINTER_NAME = "XP-80C (copy 1)"
+PRINTER_NAME = "XP-80"
 
 def print_receipt(order):
     """

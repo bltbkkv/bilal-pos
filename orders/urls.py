@@ -61,7 +61,9 @@ urlpatterns = [
     path('orders/<int:order_id>/add-item/', views.add_item_to_order, name='add_item_to_order'),
 
     # удаление позиции
-    path('order-items/<int:item_id>/remove/', views.remove_item_from_order, name='remove_item_from_order'),
+    path("order-items/<int:item_id>/remove/", views.remove_item_from_order, name="remove_item_from_order"),
+
+
 
     # пересчёт заказа
     path('orders/<int:order_id>/recalc/', views.recalc_order_total, name='recalc_order_total'),
