@@ -84,9 +84,11 @@ class Product(models.Model):
 
 
 
+
 class Order(models.Model):
     STATUS_CHOICES = [
         ('pending', 'Готовится'),
+        ('called', 'Вызван'),
         ('ready', 'Готово'),
         ('cancelled', 'Отменён'),
     ]
@@ -99,7 +101,7 @@ class Order(models.Model):
 
     id = models.AutoField(primary_key=True)
     employee = models.ForeignKey(
-        Employee,
+        'Employee',
         on_delete=models.SET_NULL,
         null=True,
         db_column="employee_id",
@@ -110,9 +112,14 @@ class Order(models.Model):
     cancelled = models.BooleanField(default=False)
     is_paid = models.BooleanField(default=True)
     note = models.CharField(max_length=200, null=True, blank=True)
-    cancelled_by = models.ForeignKey(Employee, null=True, blank=True, on_delete=models.SET_NULL)
+    cancelled_by = models.ForeignKey(
+        'Employee',
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="cancelled_orders"
+    )
     cancelled_at = models.DateTimeField(null=True, blank=True)
-    # 🔹 исправлено: убран default=0, чтобы save() сам проставлял номер
     receipt_number = models.PositiveIntegerField(null=True, blank=True)
     status = models.CharField(
         max_length=20,
@@ -133,9 +140,8 @@ class Order(models.Model):
     def __str__(self):
         return f"Заказ #{self.receipt_number} — {self.total} сом ({self.get_status_display()})"
 
-    # 🔹 логика циклической нумерации
     def save(self, *args, **kwargs):
-        if not self.receipt_number:  # только при создании нового заказа
+        if not self.receipt_number:
             last_order = Order.objects.order_by('-id').first()
             if last_order and last_order.receipt_number:
                 self.receipt_number = (last_order.receipt_number % 40) + 1

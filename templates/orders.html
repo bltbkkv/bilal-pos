@@ -63,6 +63,58 @@
       line-height: 1; min-width: 36px; min-height: 32px;
     }
     .order-cell button:hover { background: #e0a800; }
+
+    /* 📱 Телефон — вертикальный режим */
+@media (max-width: 768px) {
+  .topbar {
+    flex-direction: column;
+    align-items: flex-start;
+    padding: 10px;
+  }
+  .topbar .brand { font-size: 18px; }
+  .topbar .nav a { margin-left: 0; margin-right: 12px; font-size: 14px; }
+
+  h2 { font-size: 18px; }
+
+  /* Сетка заказов — меньше колонок */
+  .order-grid {
+    grid-template-columns: repeat(2, 1fr); /* по 2 ячейки в ряд */
+    grid-auto-rows: 140px;
+    gap: 6px;
+    height: auto; /* убираем фиксированную высоту */
+  }
+
+  .order-cell {
+    font-size: 14px;
+    padding: 6px;
+  }
+  .order-label { font-size: 16px; }
+  .order-name { font-size: 14px; }
+
+  .cell-actions button {
+    font-size: 18px;
+    padding: 10px;
+    min-width: 44px;
+    min-height: 40px;
+  }
+}
+
+/* 🔎 Очень узкие телефоны */
+@media (max-width: 420px) {
+  .order-grid {
+    grid-template-columns: 1fr; /* по одной ячейке в ряд */
+    grid-auto-rows: 150px;
+  }
+  .order-cell {
+    font-size: 15px;
+  }
+  .order-label { font-size: 18px; }
+  .order-name { font-size: 15px; }
+  .cell-actions button {
+    font-size: 20px;
+    padding: 12px;
+  }
+}
   </style>
 
   <script>
@@ -195,6 +247,9 @@
   </div>
 </body>
 </html>
+
+
+
 
 
 

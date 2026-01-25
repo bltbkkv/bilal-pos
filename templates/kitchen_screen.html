@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <title>Экран заказов</title>
+  <style>
+    body {
+      margin: 0;
+      font-family: 'Segoe UI', sans-serif;
+      background: #f5f5f5;
+      color: #111;
+    }
+    .container {
+      display: flex;
+      height: 100vh;
+    }
+    .column {
+      flex: 1;
+      padding: 20px;
+      background: #fff;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+    }
+    .cooking {
+      border-right: 4px solid #ddd;
+    }
+    h2 {
+      font-size: 32px;
+      margin-bottom: 10px;
+      font-weight: bold;
+      text-transform: uppercase;
+      padding: 15px;
+      border-radius: 8px;
+      color: #fff;
+      width: 100%;
+      text-align: center;
+    }
+    .cooking h2 {
+      background: #d32f2f;
+    }
+    .ready h2 {
+      background: #2e7d32;
+    }
+    .orders {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      justify-content: flex-start;
+      align-items: center;
+      gap: 20px;
+      width: 100%;
+      overflow: hidden;
+    }
+    .order {
+      background: #fff;
+      padding: 10px;
+      border-radius: 8px;
+      box-shadow: 0 2px 6px rgba(0,0,0,0.1);
+      font-size: 40px;
+      font-weight: bold;
+      text-align: center;
+      width: 90%;
+      transition: font-size 0.3s ease;
+    }
+    .cooking .order {
+      border: 3px solid #d32f2f;
+      color: #d32f2f;
+    }
+    .ready .order {
+      border: 3px solid #2e7d32;
+      color: #2e7d32;
+    }
+  </style>
+  <script>
+    // адаптивный шрифт при большом количестве заказов
+    function adjustLayout() {
+      const cookingCount = document.querySelectorAll('.cooking .order').length;
+      const readyCount = document.querySelectorAll('.ready .order').length;
+      const maxCount = Math.max(cookingCount, readyCount);
+
+      let fontSize = 40;
+      let padding = 10;
+
+      if (maxCount > 6) {
+        fontSize = 32;
+        padding = 8;
+      }
+      if (maxCount > 10) {
+        fontSize = 26;
+        padding = 6;
+      }
+      if (maxCount > 15) {
+        fontSize = 22;
+        padding = 4;
+      }
+
+      document.querySelectorAll('.order').forEach(el => {
+        el.style.fontSize = fontSize + 'px';
+        el.style.padding = padding + 'px';
+      });
+    }
+
+    // плавное обновление через fetch
+    async function updateOrders() {
+      try {
+        const response = await fetch(window.location.href, { headers: { 'X-Requested-With': 'XMLHttpRequest' } });
+        const html = await response.text();
+
+        // создаём временный DOM
+        const parser = new DOMParser();
+        const doc = parser.parseFromString(html, 'text/html');
+
+        // заменяем содержимое блоков
+        document.querySelector('.cooking .orders').innerHTML =
+          doc.querySelector('.cooking .orders').innerHTML;
+        document.querySelector('.ready .orders').innerHTML =
+          doc.querySelector('.ready .orders').innerHTML;
+
+        adjustLayout();
+      } catch (e) {
+        console.error('Ошибка обновления заказов:', e);
+      }
+    }
+
+    // запуск каждые 5 секунд
+    setInterval(updateOrders, 5000);
+
+    window.addEventListener('DOMContentLoaded', adjustLayout);
+  </script>
+</head>
+<body>
+  <div class="container">
+    <div class="column cooking">
+      <h2>Готовятся</h2>
+      <div class="orders">
+        {% for order in cooking_orders %}
+          <div class="order">Заказ №{{ order.receipt_number }}</div>
+        {% empty %}
+          <div class="order">Нет заказов</div>
+        {% endfor %}
+      </div>
+    </div>
+    <div class="column ready">
+      <h2>Готовы</h2>
+      <div class="orders">
+        {% for order in ready_orders %}
+          <div class="order">Заказ №{{ order.receipt_number }}</div>
+        {% empty %}
+          <div class="order">Нет готовых заказов</div>
+        {% endfor %}
+      </div>
+    </div>
+  </div>
+</body>
+</html>

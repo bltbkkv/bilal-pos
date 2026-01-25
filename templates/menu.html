@@ -288,6 +288,123 @@ body {
 .keyboard button.ok:hover {
   background: #218838;
 }
+/* 📱 Горизонтальный телефон */
+@media (max-width: 900px) and (orientation: landscape) {
+  body {
+    font-size: 15px;
+    width: 100%;          /* убираем фиксированную ширину */
+    min-height: 100vh;    /* растягиваем по экрану */
+    height: auto;         /* не фиксируем высоту */
+    overflow-x: hidden;   /* убираем горизонтальный скролл */
+    overflow-y: auto;     /* разрешаем вертикальный скролл только на телефоне */
+    background: #1e1e1e;
+    color: #f0f0f0;
+  }
+
+  .layout {
+    width: 100%;
+    min-height: 100vh;
+    height: auto;
+  }
+
+  .content {
+    flex-direction: row;  /* две колонки */
+    width: 100%;
+    height: auto;         /* убираем фиксированную высоту */
+  }
+
+  /* Левая часть — категории и блюда */
+  .left {
+    width: 65%;
+    padding: 8px;
+    height: auto;         /* убираем фиксированную высоту */
+    overflow-y: auto;     /* скролл внутри левой части */
+  }
+
+  /* Корзина справа */
+  .cart-panel {
+    width: 35%;
+    padding: 8px;
+    border-left: 2px solid #333;
+    background: #252525;
+    font-size: 14px;
+    border-radius: 12px 0 0 12px;
+    height: auto;         /* убираем фиксированную высоту */
+    overflow-y: auto;     /* скролл внутри корзины */
+  }
+
+  /* Категории */
+  .categories {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 8px;
+    margin-bottom: 10px;
+  }
+  .cat-btn {
+    font-size: 15px;
+    padding: 10px;
+    min-height: 44px;
+    border-radius: 8px;
+    background: #444;
+    color: #fff;
+    font-weight: bold;
+    border: none;
+    cursor: pointer;
+    transition: 0.2s;
+  }
+  .cat-btn:hover { background: #666; }
+
+  /* Блюда — квадратные карточки */
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+    grid-auto-rows: 130px;
+    gap: 8px;
+    width: 100%;
+    overflow-y: auto;     /* скролл внутри списка блюд */
+  }
+  .item {
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    background: #2c2c2c;
+    border-radius: 8px;
+    padding: 6px;
+    text-align: center;
+    transition: 0.2s;
+  }
+  .item:hover { background: #3a3a3a; }
+  .item img { display: none; }
+  .item-name {
+    font-size: 13px;
+    margin-bottom: 4px;
+    font-weight: 500;
+  }
+  .item-price {
+    font-size: 14px;
+    font-weight: bold;
+    color: #ffc107;
+  }
+
+  /* Кнопки действий в корзине */
+  .cart-actions {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin-top: 10px;
+  }
+  .cart-actions button {
+    font-size: 15px;
+    padding: 12px;
+    border-radius: 8px;
+    font-weight: bold;
+    border: none;
+    cursor: pointer;
+  }
+  #btn-checkout { background: #28a745; color: #fff; }
+  #btn-clear { background: #ff4d4d; color: #fff; }
+}
 
 
 </style>

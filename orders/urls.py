@@ -90,6 +90,8 @@ path('orders/<int:order_id>/discard-draft/', views.discard_draft, name='discard_
 
 path("orders/<int:order_id>/delivery/", views.mark_delivery, name="mark_delivery"),
 
+path('kitchen/', views.kitchen_screen, name='kitchen_screen'),
+
 
 
     # завершение работы сервера
