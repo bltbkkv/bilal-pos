@@ -151,6 +151,12 @@
     }
     tr:nth-child(even) { background-color: #2c2c2c; }
     tr:nth-child(odd) { background-color: #1a1a1a; }
+
+ #ingredientsModal .modal-body {
+  max-height: 70vh;   /* ограничение по высоте */
+  overflow-y: auto;   /* вертикальная прокрутка */
+}
+
   </style>
 </head>
 <body>
@@ -162,6 +168,11 @@
 
       <!-- Кнопка модалки прибыли -->
       <button type="button" onclick="openProfitModal()">Прибыль по товарам</button>
+      <button type="button" class="btn btn-info" data-bs-toggle="modal" data-bs-target="#ingredientsModal">
+  Остатки ингредиентов
+</button>
+
+
 
       <!-- Быстрая выдача чека отчёта по выбранному диапазону -->
       <form method="get" action="{% url 'report_receipt' %}" style="display:inline;">
@@ -246,50 +257,50 @@
     </div>
   </div>
 
-  <!-- Модалка отмен -->
-  <div id="cancelModal" class="modal">
-    <div class="modal-content" style="font-family: monospace; line-height: 1.6;">
-      <span class="close" onclick="closeCancelModal()">&times;</span>
-      <h2>Отменённые заказы и блюда</h2>
+<!-- Модалка отмен -->
+<div id="cancelModal" class="modal">
+  <div class="modal-content" style="font-family: monospace; line-height: 1.6;">
+    <span class="close" onclick="closeCancelModal()">&times;</span>
+    <h2>Отменённые заказы и блюда</h2>
 
-      {% if cancellations_blocks %}
-        {% for block in cancellations_blocks %}
-          <div style="border:1px dashed #555; border-radius:8px; padding:12px; margin:12px 0; background:#222;">
-            <div style="color:#ffc107; font-weight:bold; margin-bottom:8px;">
-              Кассир: {{ block.cashier }}
+    {% if cancellations_blocks %}
+      {% for block in cancellations_blocks %}
+        <div style="border:1px dashed #555; border-radius:8px; padding:12px; margin:12px 0; background:#222;">
+          <div style="color:#ffc107; font-weight:bold; margin-bottom:8px;">
+            Кассир: {{ block.cashier }}
+          </div>
+
+          {% for line in block.lines %}
+            <div style="padding:4px 0; border-bottom:1px dotted #333;">
+              {% if line.kind == "order" %}
+                <strong style="color:#0af;">{{ line.title }}</strong>
+              {% elif line.kind == "item" %}
+                {{ line.title }}
+              {% elif line.kind == "deleted" %}
+                <span style="color:#ff4d4d;">{{ line.title }}</span>
+              {% else %}
+                {{ line.title }}
+              {% endif %}
+
+              {% if line.amount %} — {{ line.amount }} сом{% endif %}
+              <span style="float:right;">
+                {{ line.operator }} / {{ line.time|date:"d.m H:i" }}
+              </span>
             </div>
-
-            {% for line in block.lines %}
-  <div style="padding:4px 0; border-bottom:1px dotted #333;">
-    {% if line.kind == "order" %}
-      <strong style="color:#0af;">{{ line.title }}</strong>
-    {% elif line.kind == "item" %}
-      {{ line.title }}
-    {% elif line.kind == "deleted" %}
-      <span style="color:#ff4d4d;">{{ line.title }}</span>
+          {% endfor %}
+        </div>
+      {% endfor %}
     {% else %}
-      {{ line.title }}
+      <p>Нет отменённых заказов или блюд</p>
     {% endif %}
 
-    {% if line.amount %} — {{ line.amount }} сом{% endif %}
-    <span style="float:right;">
-      {{ line.operator }} / {{ line.time|date:"d.m H:i" }}
-    </span>
+    <!-- Выдача чека отмен по выбранному диапазону -->
+    <button type="button" onclick="printCancelledReceipt()" style="margin-top:20px; padding:12px 20px; font-size:18px; background:#ffc107; border:none; border-radius:6px; cursor:pointer;">
+      Выдать чек
+    </button>
   </div>
-{% endfor %}
+</div>
 
-          </div>
-        {% endfor %}
-      {% else %}
-        <p>Нет отменённых заказов или блюд</p>
-      {% endif %}
-
-      <!-- Выдача чека отмен по выбранному диапазону -->
-      <button type="button" onclick="printCancelledReceipt()" style="margin-top:20px; padding:12px 20px; font-size:18px; background:#ffc107; border:none; border-radius:6px; cursor:pointer;">
-        Выдать чек
-      </button>
-    </div>
-  </div>
 
   <script>
     // Открытие/закрытие модалок
@@ -359,4 +370,69 @@
       .catch(() => alert('Ошибка соединения с принтером'));
     }
   </script>
+
+
+
+<div class="modal fade" id="ingredientsModal" tabindex="-1" aria-labelledby="ingredientsModalLabel" aria-hidden="true">
+  <div class="modal-dialog modal-lg">
+    <div class="modal-content">
+      <div class="modal-header">
+
+        <div style="text-align: right; margin-top: 20px;">
+  <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">
+    Назад
+  </button>
+</div>
+
+      </div>
+      <div class="modal-body">
+        <table class="table table-striped">
+
+          <thead>
+            <tr>
+              <th>Ингредиент</th>
+              <th>Использовано</th>
+              <th>Доставлено</th>
+              <th>Остаток</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for row in ingredients_rows %}
+            <tr>
+              <td>{{ row.name }}</td>
+              <td class="used">{{ row.used }}</td>
+              <td>
+                <input type="number" class="form-control delivered-input"
+                       value="{{ row.delivered }}" min="0" step="0.01">
+              </td>
+              <td class="left">{{ row.left }}</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
+
+
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+
+<script>
+document.addEventListener('DOMContentLoaded', () => {
+  document.querySelectorAll('#ingredientsModal .delivered-input').forEach(input => {
+    input.addEventListener('input', () => {
+      const row = input.closest('tr');
+      const used = parseFloat(row.querySelector('.used').textContent) || 0;
+      const delivered = parseFloat(input.value) || 0;
+      let left = delivered - used;
+      if (left < 0) left = 0;
+      row.querySelector('.left').textContent = left.toFixed(2);
+    });
+  });
+});
+</script>
+
+
 </body>

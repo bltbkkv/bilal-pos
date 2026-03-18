@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <title>Рекламные карточки</title>
+  <style>
+    body {
+      margin: 0;
+      background: black;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      height: 100vh;
+    }
+    video {
+      max-width: 100%;
+      max-height: 100%;
+    }
+  </style>
+</head>
+<body>
+  <video id="player" autoplay muted playsinline></video>
+
+  <script>
+    const videos = ["burger.mp4", "chiken.mp4", "pizza.mp4", "shawerma4.mp4"];
+    let index = 0;
+    const player = document.getElementById("player");
+
+    function playNext() {
+      player.src = videos[index];
+      player.play();
+      index = (index + 1) % videos.length;
+    }
+
+    player.addEventListener("ended", playNext);
+    playNext(); // старт
+  </script>
+</body>
+</html>

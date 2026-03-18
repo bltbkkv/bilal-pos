@@ -7,6 +7,8 @@ import win32ui
 from django.views.decorators.http import require_GET
 from django.db.models import Q
 from collections import defaultdict
+
+
 from decimal import Decimal
 import pytz
 from django.utils import timezone
@@ -26,7 +28,7 @@ from .models import Product, Order, OrderItem, Employee
 from django.db.models import Sum, F, ExpressionWrapper, DecimalField
 from datetime import datetime
 from django.contrib.auth import login
-from .sound import generate_voice
+
 
 
 
@@ -106,7 +108,7 @@ def print_receipt_view(request, order_id):
     order = get_object_or_404(Order, id=order_id)
 
 
-    PRINTER_CASH = "XP-80C"   # кассовый принтер
+    PRINTER_CASH = "XP-80"   # кассовый принтер
     PRINTER_KITCHEN = "XP-80C (copy 1)"  # кухонный (можно указать другой, если есть)
 
     def _print_on_printer(printer_name, items_filter=None):
@@ -255,15 +257,12 @@ def report_by_date(request):
         try:
             start_dt = datetime.strptime(f"{start_date} {start_time}", "%Y-%m-%d %H:%M")
             end_dt = datetime.strptime(f"{end_date} {end_time}", "%Y-%m-%d %H:%M")
-
-            # 🔹 всегда приводим к Бишкекскому времени
             start_dt = BISHKEK_TZ.localize(start_dt)
             end_dt = BISHKEK_TZ.localize(end_dt)
         except Exception:
             start_dt = None
             end_dt = None
 
-        # активные заказы в диапазоне
         orders = Order.objects.filter(cancelled=False)
         if start_dt and end_dt:
             orders = orders.filter(order_time__range=(start_dt, end_dt))
@@ -271,7 +270,6 @@ def report_by_date(request):
         total = orders.aggregate(Sum('total'))['total__sum'] or Decimal('0')
         count = orders.count()
 
-        # прибыль по неотменённым позициям
         profit = OrderItem.objects.filter(order__in=orders, cancelled=False).aggregate(
             total_profit=Sum(
                 ExpressionWrapper(
@@ -281,7 +279,6 @@ def report_by_date(request):
             )
         )['total_profit'] or Decimal('0')
 
-        # прибыль по товарам
         items_profit = OrderItem.objects.filter(order__in=orders, cancelled=False).values(
             'product__name',
             'product__price',
@@ -296,8 +293,8 @@ def report_by_date(request):
             )
         ).order_by('-total_profit')
 
-
         # расход ингредиентов
+        # расход ингредиентов (общий для POST и GET)
         ingredients_usage_qs = (
             OrderItem.objects
             .filter(order__in=orders, cancelled=False)
@@ -316,12 +313,13 @@ def report_by_date(request):
             for row in ingredients_usage_qs
         }
 
-        delivered_lavash_m = D(request.POST.get('delivered_lavash_m'))
-        delivered_lavash_l = D(request.POST.get('delivered_lavash_l'))
-        delivered_lavash_s = D(request.POST.get('delivered_lavash_s'))
-        delivered_bun      = D(request.POST.get('delivered_bun'))
-        delivered_strips   = D(request.POST.get('delivered_strips'))
-        delivered_wings    = D(request.POST.get('delivered_wings'))
+        # --- подсчёт остатков ингредиентов ---
+        delivered_lavash_m = D(request.POST.get('delivered_lavash_m') or request.GET.get('delivered_lavash_m') or '0')
+        delivered_lavash_l = D(request.POST.get('delivered_lavash_l') or request.GET.get('delivered_lavash_l') or '0')
+        delivered_lavash_s = D(request.POST.get('delivered_lavash_s') or request.GET.get('delivered_lavash_s') or '0')
+        delivered_bun = D(request.POST.get('delivered_bun') or request.GET.get('delivered_bun') or '0')
+        delivered_strips = D(request.POST.get('delivered_strips') or request.GET.get('delivered_strips') or '0')
+        delivered_wings = D(request.POST.get('delivered_wings') or request.GET.get('delivered_wings') or '0')
 
         ING_MAP = {
             'lavash_m': 'М-лаваш',
@@ -335,27 +333,25 @@ def report_by_date(request):
             'lavash_m': delivered_lavash_m,
             'lavash_l': delivered_lavash_l,
             'lavash_s': delivered_lavash_s,
-            'bun':      delivered_bun,
-            'strips':   delivered_strips,
-            'wings':    delivered_wings,
+            'bun': delivered_bun,
+            'strips': delivered_strips,
+            'wings': delivered_wings,
         }
 
-        usage_short = {}
-        ingredients_left = {}
         ingredients_rows = []
-        for short_key, full_name in ING_MAP.items():
-            used = Decimal(usage_by_full_name.get(full_name, Decimal('0')))
-            usage_short[short_key] = used
         for short_key, delivered in supplies_short.items():
-            full_name = ING_MAP[short_key]
-            used = usage_short.get(short_key, Decimal('0'))
+            used = usage_by_full_name.get(short_key, Decimal('0'))
             left = delivered - used
             if left < 0:
                 left = Decimal('0')
-            ingredients_left[full_name] = {'delivered': delivered, 'used': used, 'left': left}
-            ingredients_rows.append({'name': full_name, 'delivered': delivered, 'used': used, 'left': left})
+            ingredients_rows.append({
+                'name': ING_MAP[short_key],
+                'delivered': delivered,
+                'used': used,
+                'left': left
+            })
 
-        # отмены: заказы, позиции, удалённые позиции
+        # отмены
         cancelled_orders = Order.objects.filter(cancelled=True, cancelled_by__isnull=False)
         cancelled_items = OrderItem.objects.filter(cancelled=True, cancelled_by__isnull=False)
         deleted_items   = DeletedItem.objects.filter(cashier__isnull=False)
@@ -411,8 +407,7 @@ def report_by_date(request):
             'count': count,
             'profit': profit,
             'items_profit': items_profit,
-            'ingredients_usage': usage_short,
-            'ingredients_left': ingredients_left,
+            'ingredients_usage': usage_by_full_name,
             'ingredients_rows': ingredients_rows,
             'delivered_lavash_m': delivered_lavash_m,
             'delivered_lavash_l': delivered_lavash_l,
@@ -429,7 +424,6 @@ def report_by_date(request):
         })
 
     # --- GET: собираем отмены по выбранному диапазону ---
-
     now_bishkek = timezone.now().astimezone(BISHKEK_TZ)
 
     # Берём параметры из формы (если не выбраны — ставим дефолт)
@@ -654,7 +648,7 @@ def report_receipt(request):
     import win32ui
     from datetime import datetime
 
-    PRINTER_NAME = "XP-80C (copy 1)"
+    PRINTER_NAME = "XP-80"
 
     start_date = request.GET.get('start')
     end_date = request.GET.get('end')
@@ -1165,7 +1159,7 @@ def recalc_order_total(request, order_id):
     # печать
     if delta_items:
         print_to_printer(
-            "XP-80C",
+            "XP-80C (copy 1)",
             order.receipt_number,
             order.order_time,
             delta_items,
@@ -1177,7 +1171,7 @@ def recalc_order_total(request, order_id):
             edit_ops=edit_ops
         )
         print_to_printer(
-            "XP-80C (copy 1)",
+            "XP-80",
             order.receipt_number,
             order.order_time,
             delta_items,
@@ -1228,7 +1222,7 @@ def _recalc_and_serialize(order):
 
 
 
-
+@csrf_exempt
 @require_POST
 def order_ready(request, order_id):
     order = get_object_or_404(Order, id=order_id)
@@ -1237,7 +1231,7 @@ def order_ready(request, order_id):
     order.items.filter(is_draft=True).update(is_draft=False)
     return JsonResponse({"ok": True})
 
-
+@csrf_exempt
 @require_GET
 def order_cancel(request, order_id):
     order = get_object_or_404(Order, id=order_id)
@@ -1255,7 +1249,7 @@ def order_cancel(request, order_id):
     # печать чека отмены (до изменения флагов)
     if cancelled_items.exists():
         print_to_printer(
-            "XP-80C",
+            "XP-80C (copy 1)",
             order.receipt_number,
             order.order_time,
             cancelled_items,
@@ -1264,7 +1258,7 @@ def order_cancel(request, order_id):
             operator_name=emp.name if emp else "-"
         )
         print_to_printer(
-            "XP-80C (copy 1)",
+            "XP-80",
             order.receipt_number,
             order.order_time,
             cancelled_items,
@@ -1295,7 +1289,7 @@ from django.http import JsonResponse
 from django.shortcuts import get_object_or_404
 from django.views.decorators.http import require_GET
 import pytz
-
+@csrf_exempt
 @require_GET
 def order_receipt_reprint(request, order_id):
     order = get_object_or_404(Order, id=order_id)
@@ -1384,7 +1378,7 @@ def order_receipt_reprint(request, order_id):
         operator_name=operator_name,  # передаём функцию в печать
     )
     print_to_printer(
-        "XP-80C (copy 1)",
+        "XP-80",
         order.receipt_number,
         order_dt_local,
         items,
@@ -1402,20 +1396,9 @@ from django.http import JsonResponse
 from django.views.decorators.http import require_GET
 from django.shortcuts import get_object_or_404
 from .models import Order
-from .sound import generate_voice   # импортируем функцию
+  # импортируем функцию
 
-@require_GET
-def order_call(request, order_id):
-    order = get_object_or_404(Order, id=order_id)
-    try:
-        # 🔹 при вызове переводим заказ в статус "called"
-        order.status = 'called'
-        order.save()
 
-        generate_voice(order)   # озвучиваем именно receipt_number
-        return JsonResponse({"ok": True})
-    except Exception as e:
-        return JsonResponse({"ok": False, "error": str(e)}, status=500)
 
 
 
@@ -1437,8 +1420,8 @@ def print_receipt_direct(order):
     order_no = getattr(order, "receipt_number", None) or getattr(order, "number", None) or 0
 
     # Имена принтеров
-    PRINTER_CLIENT = "XP-80C (copy 1)"
-    PRINTER_KITCHEN = "XP-80C"
+    PRINTER_CLIENT = "XP-80"
+    PRINTER_KITCHEN = "XP-80C (copy 1)"
 
     # Тип заказа (определим из позиций)
     order_type = ""
@@ -1541,8 +1524,6 @@ def print_receipt_direct(order):
         draw_center(pdc, y, f"ЗАКАЗ №{order_no}", size=60); y += 70
         draw_center(pdc, y, FULL_LINE, size=28); y += line_h
         draw_center(pdc, y, "BILAL FRIED CHICKEN", size=36); y += 40
-        draw_center(pdc, y, "ул. Чуй 23, 41", size=28); y += line_h
-        draw_center(pdc, y, "Мбанк: 0706776565", size=28); y += line_h
         draw_center(pdc, y, FULL_LINE, size=28); y += line_h
 
         # Оператор и время
@@ -1805,7 +1786,7 @@ def reprint_receipt_view(request, order_id):
         order_dt_local = datetime.fromtimestamp(ts, tz)
 
         order_no = getattr(order, "receipt_number", None) or 0
-        PRINTER_CLIENT = "XP-80C (copy 1)"
+        PRINTER_CLIENT = "XP-80"
 
         # Шрифты
         font_bold = win32ui.CreateFont({"name": "Consolas", "height": 28, "weight": 800, "charset": 204})
@@ -1888,8 +1869,6 @@ def reprint_receipt_view(request, order_id):
         draw_center(pdc, y, f"ЗАКАЗ №{order_no}", size=60); y += 70
         draw_center(pdc, y, FULL_LINE, size=28); y += line_h
         draw_center(pdc, y, "BILAL FRIED CHICKEN", size=36); y += 40
-        draw_center(pdc, y, "ул. Чуй 23, 41", size=28); y += line_h
-        draw_center(pdc, y, "Мбанк: 0706776565", size=28); y += line_h
         draw_center(pdc, y, FULL_LINE, size=28); y += line_h
 
         operator = getattr(order, "employee", None)
@@ -1941,15 +1920,6 @@ def reprint_receipt_view(request, order_id):
             'trace': traceback.format_exc()
         }, status=500)
 
-
-def call_order(request, order_id):
-    try:
-        print(f"🔊 Вызов для заказа №{order_id}")
-        generate_voice(order_id)
-        return JsonResponse({"ok": True, "order_id": order_id})
-    except Exception as e:
-        print(f"❌ Ошибка вызова: {e}")
-        return JsonResponse({"ok": False, "error": str(e)})
 
 
 
@@ -2334,8 +2304,6 @@ def print_to_printer(
         draw_center(pdc, y, f"ЗАКАЗ №{order_no}", size=60); y += 70
         draw_center(pdc, y, FULL_LINE, size=28); y += line_h
         draw_center(pdc, y, "BILAL FRIED CHICKEN", size=36); y += 40
-        draw_center(pdc, y, "ул. Чуй 23, 41", size=28); y += line_h
-        draw_center(pdc, y, "Мбанк: 0706776565", size=28); y += line_h
         draw_center(pdc, y, FULL_LINE, size=28); y += line_h
 
         draw_text(pdc, x_name, y, f"Оператор: {operator_name}", size=28); y += line_h
@@ -2424,10 +2392,10 @@ def recalc_order_view(request, order_id):
             return JsonResponse({'ok': True, 'msg': 'Изменений нет', 'items': [], 'total': order.total})
 
         # печать на кухню
-        print_to_printer("XP-80C", order.receipt_number, order.order_time, new_items, kitchen=True)
+        print_to_printer("XP-80C (copy 1)", order.receipt_number, order.order_time, new_items, kitchen=True)
 
         # печать на кассу
-        print_to_printer("XP-80C (copy 1)", order.receipt_number, order.order_time, new_items, kitchen=False)
+        print_to_printer("XP-80", order.receipt_number, order.order_time, new_items, kitchen=False)
 
         # сбрасываем флаг is_new
         new_items.update(is_new=False)
@@ -2501,7 +2469,7 @@ def print_cancelled_receipt(request):
         items_by_order[it.order_id].append(it)
 
     # Печать
-    printer_name = "XP-80C (copy 1)"
+    printer_name = "XP-80"
     pdc = win32ui.CreateDC()
     pdc.CreatePrinterDC(printer_name)
     pdc.StartDoc("Отменённые заказы и блюда")
@@ -2616,4 +2584,126 @@ def kitchen_screen(request):
         'cooking_orders': cooking_orders,
         'ready_orders': called_orders,
     })
+
+
+
+@csrf_exempt
+def update_dish_order(request):
+    if request.method == 'POST':
+        data = json.loads(request.body)
+        category = data.get('category')
+        order = data.get('order', [])
+        for index, dish_id in enumerate(order):
+            Product.objects.filter(id=dish_id, category=category).update(order=index)
+        return JsonResponse({'status': 'ok'})
+
+from django.db.models import Sum
+from django.shortcuts import render
+from django.utils import timezone
+from .models import OrderItem
+
+def cancelled_report(request):
+    # диапазон дат можно брать из GET параметров
+    start = request.GET.get("start")
+    end = request.GET.get("end")
+
+    if start and end:
+        start = timezone.datetime.fromisoformat(start)
+        end = timezone.datetime.fromisoformat(end)
+    else:
+        # по умолчанию — сегодня
+        today = timezone.localtime(timezone.now()).date()
+        start = timezone.make_aware(timezone.datetime.combine(today, timezone.datetime.min.time()))
+        end = timezone.make_aware(timezone.datetime.combine(today, timezone.datetime.max.time()))
+
+    items = OrderItem.objects.filter(
+        order__order_time__gte=start,
+        order__order_time__lte=end,
+        cancelled=True
+    ).select_related("order", "product", "cancelled_by")
+
+    grouped = {}
+    total_sum = 0
+    for it in items:
+        order = it.order
+        receipt = order.receipt_number or "-"
+        cancelled_by = it.cancelled_by.name if it.cancelled_by else "неизвестно"
+        cancelled_at = it.cancelled_at or order.order_time
+        key = (receipt, cancelled_by, cancelled_at)
+
+        price = it.price or it.product.price or 0
+        qty = it.original_quantity or it.quantity or 0
+        total = price * qty
+        total_sum += total
+
+        if key not in grouped:
+            grouped[key] = {"items": [], "order_total": 0}
+        grouped[key]["items"].append(f"{it.product.name} × {qty} шт = {total:.2f} сом")
+        grouped[key]["order_total"] += total
+
+    return render(request, "report_by_date.html", {
+        "grouped": grouped,
+        "total_sum": total_sum,
+        "start": start,
+        "end": end,
+    })
+
+
+
+
+
+
+
+from django.http import JsonResponse
+from django.shortcuts import get_object_or_404
+from django.views.decorators.http import require_POST
+import threading
+
+from .sound import announce
+from .models import Order
+
+
+def order_call(request, order_id):
+    order = get_object_or_404(Order, id=order_id)
+    try:
+        order.status = 'called'
+        order.save()
+
+        num = order.receipt_number or order.id
+        threading.Thread(target=announce, args=(num,)).start()
+
+        return JsonResponse({"ok": True, "order": num})
+    except Exception as e:
+        return JsonResponse({"ok": False, "error": str(e)}, status=500)
+
+
+# orders/views.py
+import threading
+from django.http import JsonResponse
+from django.shortcuts import get_object_or_404
+from .models import Order
+from .sound import announce_en  # твоя функция английской озвучки
+
+def call_order_english(request, order_id):
+    order = get_object_or_404(Order, id=order_id)
+    try:
+        # меняем статус заказа
+        order.status = 'called'
+        order.save()
+
+        # берём номер для озвучки
+        num = order.receipt_number or order.id
+
+        # запускаем озвучку в отдельном потоке
+        threading.Thread(target=announce_en, args=(num,)).start()
+
+        return JsonResponse({"ok": True, "order": num})
+    except Exception as e:
+        return JsonResponse({"ok": False, "error": str(e)}, status=500)
+
+
+from django.shortcuts import render
+
+def reklama_view(request):
+    return render(request, "reklama.html")
 

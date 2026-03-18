@@ -1,49 +1,420 @@
-<!-- templates/orders_ready.html -->
 {% load static %}
 <!DOCTYPE html>
 <html lang="ru">
 <head>
-  <meta charset="UTF-8">
-  <title>Заказы — Готово</title>
-  <link rel="stylesheet" href="{% static 'style.css' %}">
-  <style>
-    .ready-row { display: flex; gap: 16px; overflow-x: auto; padding: 20px; }
-    .order-box { min-width: 220px; background: #fff; border-radius: 10px; box-shadow: 0 2px 6px rgba(0,0,0,0.1); padding: 16px; }
-    .order-box h4 { margin: 0 0 8px; }
-    .order-box .items { color: #555; font-size: 14px; }
-    .btn-edit { display: inline-block; margin-top: 10px; background: #007bff; color: #fff; padding: 6px 12px; border-radius: 6px; text-decoration: none; }
-    .btn-edit:hover { background: #0069d9; }
-  </style>
+    <meta charset="UTF-8">
+    <title>Mubarak — Восточная кухня</title>
+    <!-- Google Fonts -->
+    <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@700&family=Scheherazade+New:wght@700&family=Open+Sans&display=swap" rel="stylesheet">
+    <!-- FontAwesome -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
+    <!-- AOS -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/aos/2.3.4/aos.css">
+    <!-- CSS -->
+    <link rel="stylesheet" href="{% static 'css/style.css' %}">
+<style>
+ /* Базовые стили */
+body {
+    margin: 0;
+    font-family: 'Open Sans', sans-serif;
+    background: #f3e8d7;
+    color: #3a2a1a;
+    line-height: 1.6;
+    padding-top: 80px; /* зазор под фиксированный header */
+}
+
+/* HEADER (фиксированный, логотип по центру) */
+.site-header {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 80px;
+    z-index: 1000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: #fff;
+    box-shadow: 0 2px 6px rgba(0,0,0,0.1); /* мягкая тень */
+    padding: 0 40px;
+    text-transform: uppercase;
+    letter-spacing: 2px;
+}
+.nav-left, .nav-right {
+    flex: 1;
+    display: flex;
+    justify-content: center;
+}
+.logo {
+    flex: 0;
+    text-align: center;
+    font-family: 'Playfair Display', serif;
+}
+.logo h1 { margin: 0; font-size: 32px; color: #3a2a1a; }
+.logo p { margin: 0; font-size: 18px; color: #3a2a1a; }
+.logo span { font-size: 12px; color: #3a2a1a; }
+.site-header a {
+    color: #3a2a1a;
+    text-decoration: none;
+    margin: 0 10px;
+    transition: color 0.3s;
+}
+.site-header a:hover { color: #d4a373; }
+
+/* HERO */
+.hero {
+    position: relative;
+    background-image: url("{% static 'images/fon2.jpeg' %}");
+    background-size: cover;
+    background-position: center;
+    background-attachment: fixed; /* parallax эффект */
+    color: #fff;
+    display: flex;
+    align-items: center; /* выравнивание по вертикали */
+    justify-content: space-between;
+    padding: 100px 100px 80px;
+
+}
+
+
+.hero .overlay {
+    position: absolute;
+    top:0; left:0; right:0; bottom:0;
+    background: rgba(0,0,0,0.45);
+}
+.hero-content {
+    position: relative;
+    max-width: 600px;
+    animation: fadeInUp 1.5s ease forwards;
+}
+.hero-content h2 {
+    font-family: 'Playfair Display', serif;
+    font-size: 40px;
+    margin-bottom: 20px;
+}
+.hero-content p { font-size: 18px; margin-bottom: 20px; }
+.btn-gold {
+    background: #d4a373;
+    border: none;
+    padding: 12px 24px;
+    cursor: pointer;
+    border-radius: 30px;
+    color: #fff;
+    transition: 0.3s;
+}
+.btn-gold:hover { background: #b5835a; transform: scale(1.05); }
+
+/* HERO CARDS */
+.hero-cards {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    gap: 40px; /* одинаковый зазор между карточками */
+}
+.hero-cards .card {
+    background: #fff;
+    border: 2px solid #d4a373;
+    border-radius: 12px;
+    padding: 20px;
+    text-align: center;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.2);
+    transition: transform 0.3s ease;
+}
+.hero-cards .card:hover { transform: translateY(-5px); }
+.hero-cards img {
+    width: 100%;
+    border-radius: 10px;
+    margin-bottom: 15px;
+}
+.btn-outline {
+    background: transparent;
+    border: 2px solid #d4a373;
+    color: #3a2a1a;
+    padding: 8px 16px;
+    border-radius: 20px;
+    transition: 0.3s;
+}
+.btn-outline:hover {
+    background: #d4a373;
+    color: #fff;
+}
+
+/* FAVORITES (Parallax фон + AOS анимации) */
+.favorites {
+    text-align: center;
+    padding: 80px 40px;
+    background-attachment: fixed;
+    background-size: cover;
+    background-position: center;
+}
+.favorites h2 {
+    font-family: 'Playfair Display', serif;
+    font-size: 32px;
+    margin-bottom: 40px;
+}
+.decor-line {
+    display: inline-block;
+    width: 60px;
+    height: 2px;
+    background: #d4a373;
+    margin: 0 10px;
+}
+.favorites .grid {
+    display: flex;
+    gap: 20px;
+    justify-content: center;
+    flex-wrap: wrap;
+}
+.favorites .card {
+    background: #fff;
+    border: 1px solid #d4a373;
+    border-radius: 12px;
+    padding: 30px;
+    width: 300px;
+    transition: transform 0.3s ease;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+}
+.favorites .card:hover {
+    transform: translateY(-8px);
+}
+.favorites .card img {
+    width: 100%;
+    border-radius: 10px;
+    margin-bottom: 15px;
+    transition: transform 0.3s ease;
+}
+.favorites .card:hover img {
+    transform: scale(1.05);
+}
+
+/* EXPERIENCE */
+.experience {
+    padding: 60px 40px;
+    text-align: center;
+}
+.experience h2 {
+    font-family: 'Playfair Display', serif;
+    font-size: 32px;
+    margin-bottom: 40px;
+}
+.experience .grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    gap: 20px;
+}
+.experience .card {
+    background: #fff;
+    border: 1px solid #d4a373;
+    border-radius: 12px;
+    padding: 20px;
+    transition: transform 0.3s ease;
+}
+.experience .card:hover { transform: translateY(-5px); }
+.experience img {
+    width: 100%;
+    border-radius: 10px;
+    margin-bottom: 15px;
+}
+
+/* FOOTER */
+.site-footer {
+    background: #3a2a1a;
+    color: #fff;
+    padding: 40px;
+}
+.footer-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 20px;
+}
+.footer-grid h3 { margin-bottom: 10px; color: #d4a373; }
+.footer-grid a { color: #fff; text-decoration: none; }
+.footer-grid a:hover { color: #d4a373; }
+.footer-grid input {
+    padding: 8px;
+    border-radius: 6px;
+    border: none;
+    margin-bottom: 10px;
+}
+.footer-grid button {
+    background: #d4a373;
+    border: none;
+    padding: 8px 16px;
+    border-radius: 20px;
+    color: #fff;
+    cursor: pointer;
+    transition: 0.3s;
+}
+.footer-grid button:hover { background: #b5835a; }
+.footer-bottom {
+    text-align: center;
+    margin-top: 20px;
+    border-top: 1px solid #d4a373;
+    padding-top: 10px;
+}
+
+/* Анимации */
+@keyframes fadeInUp {
+    from { opacity: 0; transform: translateY(20px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+@keyframes swing {
+    0% { transform: rotate(0deg); }
+    50% { transform: rotate(5deg); }
+    100% { transform: rotate(0deg); }
+}
+
+/* Декоративные фонари */
+.lantern {
+    position: absolute;
+    width: 80px;
+    height: 120px;
+    background: url('../icons/lantern.svg') no-repeat center/contain;
+    top: 20px;
+    animation: swing 6s ease-in-out infinite;
+}
+.lantern.left { left: 10%; }
+.lantern.right { right: 10%; }
+
+/* Адаптивность */
+@media (max-width: 1024px) {
+    .hero { flex-direction: column; align-items: center; }
+    .hero-cards { flex-direction: row; }
+}
+@media (max-width: 768px) {
+    .site-header { flex-direction: column;
+
+</style>
 </head>
 <body>
-  <header class="topbar">
-    <div class="brand">Bilal fried chiken</div>
-    <div class="nav">
-      <a href="/menu/">Меню</a>
-      <a href="{% url 'report_by_date' %}">Отчёт</a>
-      <a href="{% url 'orders_list' %}">Готовятся</a>
-      <a href="{% url 'orders_ready_list' %}">Готово</a>
-    </div>
-  </header>
 
-  <h2 style="padding: 20px;">Заказы — Готово</h2>
-  <div class="ready-row">
-    {% for order in orders %}
-      <div class="order-box">
-        <h4>Заказ №{{ order.id }}</h4>
-        <div>{{ order.total }} сом</div>
-        <div class="items">
-          {% for it in order.items.all %}
-            {% if not it.cancelled %}
-              <div>{{ it.product.name }} × {{ it.quantity }}</div>
-            {% endif %}
-          {% endfor %}
+<!-- HEADER -->
+<header class="site-header">
+    <div class="nav-left">
+        <a href="#">ГЛАВНАЯ</a>
+        <a href="#">МЕНЮ</a>
+        <a href="#">НАША ИСТОРИЯ</a>
+    </div>
+    <div class="logo">
+        <h1>MUBARAK</h1>
+        <p>Чайхана</p>
+    </div>
+    <div class="nav-right">
+        <a href="#">О НАС</a>
+        <a href="#">БЛОГ</a>
+        <a href="#">КОНТАКТЫ</a>
+    </div>
+</header>
+
+<!-- HERO -->
+<section class="hero">
+    <div class="overlay"></div>
+    <div class="hero-content">
+        <h2>ПУТЕШЕСТВИЕ СКВОЗЬ<br>БОГАТЫЕ ВКУСЫ И НАСЛЕДИЕ.</h2>
+        <p>Откройте для себя душу ближневосточной кухни: древние рецепты в современной подаче.</p>
+        <button class="btn-gold">ЗАБРОНИРОВАТЬ СТОЛИК</button>
+    </div>
+    <div class="hero-cards">
+        <div class="card" data-aos="fade-right">
+            <img src="{% static 'images/menu.jpeg' %}" alt="Фирменные вкусы">
+            <h3>ФИРМЕННЫЕ ВКУСЫ</h3>
+            <button class="btn-outline">МЕНЮ</button>
         </div>
-        <a class="btn-edit" href="{% url 'edit_order' order.id %}">Редактировать</a>
-      </div>
-    {% empty %}
-      <p>Нет заказов в статусе «Готово»</p>
-    {% endfor %}
-  </div>
+        <div class="card" data-aos="fade-left">
+            <img src="{% static 'images/uznat.jpeg' %}" alt="Атмосфера">
+            <h3>АТМОСФЕРА МАШАРАБИЯ</h3>
+            <button class="btn-outline">УЗНАТЬ БОЛЬШЕ</button>
+        </div>
+    </div>
+</section>
+
+<!-- FAVORITES -->
+<section class="favorites parallax" style="background-image: url('{% static 'images/favorites-bg.jpg' %}');">
+    <h2><span class="decor-line"></span> СЕЗОННЫЕ ФАВОРИТЫ <span class="decor-line"></span></h2>
+    <div class="grid">
+        <div class="card" data-aos="fade-right">
+            <img src="{% static 'images/potato.jpg' %}" alt="Картофель">
+            <h3>ГЕОМЕТРИЧЕСКИЙ КАРТОФЕЛЬ</h3>
+            <p>Геометрическая точность встречается с кулинарным искусством.</p>
+            <button class="btn-outline">ПОСМОТРЕТЬ БЛЮДО</button>
+        </div>
+        <div class="card" data-aos="fade-up">
+            <img src="{% static 'images/mezze.jpg' %}" alt="Меззе">
+            <h3>СОВРЕМЕННОЕ МЕЗЗЕ</h3>
+            <p>Современный взгляд на традиционные блюда.</p>
+            <button class="btn-outline">ПОСМОТРЕТЬ БЛЮДО</button>
+        </div>
+        <div class="card" data-aos="fade-left">
+            <img src="{% static 'images/chakchak.jpg' %}" alt="Чак-чак">
+            <h3>ПЕРЕОСМЫСЛЕННЫЙ ЧАК-ЧАК</h3>
+            <p>Уникальная сладость восточного десерта.</p>
+            <button class="btn-outline">ПОСМОТРЕТЬ БЛЮДО</button>
+        </div>
+    </div>
+</section>
+
+<!-- EXPERIENCE -->
+<section class="experience">
+    <h2>ОПЫТ MUBARAK</h2>
+    <div class="grid">
+        <div class="card" data-aos="fade-right">
+            <img src="{% static 'images/tradition.jpg' %}" alt="Традиция">
+            <h3>КУЛИНАРНАЯ ТРАДИЦИЯ</h3>
+            <p>Вечные рецепты, передающиеся из поколения в поколение.</p>
+            <button class="btn-outline">УЗНАТЬ БОЛЬШЕ</button>
+        </div>
+        <div class="card" data-aos="fade-up">
+            <img src="{% static 'images/spices.jpg' %}" alt="Специи">
+            <h3>ПУТЬ СПЕЦИЙ</h3>
+            <p>Путешествие по временам и традициям Востока.</p>
+            <button class="btn-outline">УЗНАТЬ БОЛЬШЕ</button>
+        </div>
+        <div class="card" data-aos="fade-left">
+            <img src="{% static 'images/private.jpg' %}" alt="Обед">
+            <h3>ЧАСТНЫЙ ОБЕД</h3>
+            <p>Безмятежная атмосфера для особых случаев.</p>
+            <button class="btn-outline">УЗНАТЬ БОЛЬШЕ</button>
+        </div>
+    </div>
+</section>
+
+<!-- FOOTER -->
+<footer class="site-footer">
+    <div class="footer-grid">
+        <div>
+            <h3>Контакты</h3>
+            <p>г. Бишкек, ул. Горького 148</p>
+            <p>+996 500 000 000</p>
+        </div>
+        <div>
+            <h3>Часы работы</h3>
+            <p>Пн-Вс: 10:00 - 23:00</p>
+        </div>
+        <div>
+            <h3>Навигация</h3>
+            <p><a href="#">Главная</a></p>
+            <p><a href="#">Меню</a></p>
+            <p><a href="#">Контакты</a></p>
+        </div>
+        <div>
+            <h3>Подписка</h3>
+            <input type="email" placeholder="Ваш email">
+            <button>Подписаться</button>
+        </div>
+    </div>
+    <div class="footer-bottom">
+        © 2026 Mubarak Restaurant
+    </div>
+</footer>
+
+<!-- AOS init -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/aos/2.3.4/aos.js"></script>
+<script>
+  AOS.init({
+    duration: 1200,
+    once: true
+  });
+</script>
+
 </body>
 </html>

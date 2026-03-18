@@ -74,7 +74,7 @@ urlpatterns = [
     # вызов заказа
     path('orders/<int:order_id>/call/', views.order_call, name='order_call'),
 
-path('orders/<int:order_id>/call/', views.order_call, name='order_call'),
+
 
 
     # уменьшение количества
@@ -91,6 +91,14 @@ path('orders/<int:order_id>/discard-draft/', views.discard_draft, name='discard_
 path("orders/<int:order_id>/delivery/", views.mark_delivery, name="mark_delivery"),
 
 path('kitchen/', views.kitchen_screen, name='kitchen_screen'),
+
+path('update-dish-order/', views.update_dish_order, name='update_dish_order'),
+
+
+path("orders/<int:order_id>/call-english/", views.call_order_english, name="call_order_english"),
+
+path("reklama/", views.reklama_view, name="reklama"),
+
 
 
 

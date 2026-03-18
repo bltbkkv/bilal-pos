@@ -12,11 +12,21 @@ https://docs.djangoproject.com/en/6.0/ref/settings/
 import os
 
 from decouple import config
+from django.conf.global_settings import CSRF_TRUSTED_ORIGINS
 from django.utils import timezone
+# settings.py
 from pathlib import Path
+import sys
 
-# Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
+
+#try:
+#    from license import main as license_check
+ #   license_check()
+#except Exception as e:
+#    print("⛔ Ошибка лицензии:", e)
+#    sys.exit(1)  # блокируем запуск проекта
+
 
 
 # Quick-start development settings - unsuitable for production
@@ -31,6 +41,10 @@ DEBUG = True
 #ALLOWED_HOSTS = ['192.168.0.111', 'localhost', '127.0.0.1']
 ALLOWED_HOSTS = ['*']
 
+CSRF_TRUSTED_ORIGINS = [
+    "http://192.168.0.50:8000",
+]
+
 
 
 
@@ -44,6 +58,7 @@ INSTALLED_APPS = [
     'django.contrib.messages',
     'django.contrib.staticfiles',
     'orders',
+    'rest_framework',
 ]
 
 MIDDLEWARE = [

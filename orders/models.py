@@ -68,8 +68,8 @@ class Product(models.Model):
             raise ValidationError("Нельзя создать больше 12 категорий")
 
         # Ограничение на количество блюд внутри одной категории (только активные)
-        if not self.pk and Product.objects.filter(category=self.category, is_active=True).count() >= 24:
-            raise ValidationError(f"В категории «{self.category}» нельзя создать больше 24 блюд")
+        if not self.pk and Product.objects.filter(category=self.category, is_active=True).count() >= 100:
+            raise ValidationError(f"В категории «{self.category}» нельзя создать больше 100 блюд")
 
     class Meta:
         db_table = "products"
@@ -87,6 +87,9 @@ class Product(models.Model):
 
 class Order(models.Model):
     STATUS_CHOICES = [
+        ('draft', 'Черновик'),  # клиент выбрал, но не оплатил
+        ('pending_payment', 'Ожидает оплаты'),  # клиент показал номер чека кассиру
+        ('paid', 'Оплачен'),  # кассир подтвердил оплату
         ('pending', 'Готовится'),
         ('called', 'Вызван'),
         ('ready', 'Готово'),

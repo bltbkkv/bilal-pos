@@ -67,6 +67,23 @@ function filterCategory(cat) {
   });
 }
 
+// ⚙️ Получение CSRF-токена
+function getCookie(name) {
+  let cookieValue = null;
+  if (document.cookie && document.cookie !== '') {
+    const cookies = document.cookie.split(';');
+    for (let i = 0; i < cookies.length; i++) {
+      const cookie = cookies[i].trim();
+      if (cookie.substring(0, name.length + 1) === (name + '=')) {
+        cookieValue = decodeURIComponent(cookie.substring(name.length + 1));
+        break;
+      }
+    }
+  }
+  return cookieValue;
+}
+const csrftoken = getCookie('csrftoken');
+
 // 🧾 Оформление заказа
 async function checkout() {
   if (!cart.length) return notify('Корзина пустая', "error");
@@ -87,7 +104,10 @@ async function checkout() {
 
   const res = await fetch('/orders/submit/', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: {
+      'Content-Type': 'application/json',
+      'X-CSRFToken': csrftoken
+    },
     body: JSON.stringify(payload)
   });
 
@@ -115,11 +135,12 @@ async function checkout() {
   }
 }
 
-
-
 // ✅ Отметить заказ как готов
 async function markReady(orderNumber) {
-  const resp = await fetch(`/orders/${orderNumber}/ready/`);
+  const resp = await fetch(`/orders/${orderNumber}/ready/`, {
+    method: 'POST',
+    headers: { 'X-CSRFToken': csrftoken }
+  });
   const data = await resp.json();
   if (data.ok) {
     const el = document.getElementById('order-' + orderNumber);
@@ -194,5 +215,4 @@ window.addEventListener('DOMContentLoaded', () => {
   }
   updateChange();
 });
-
 

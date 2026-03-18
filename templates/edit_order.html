@@ -145,8 +145,10 @@
 <div class="actions" style="margin-top: 20px; display: flex; gap: 30px; flex-wrap: wrap;">
   <button class="btn btn-primary" onclick="reprintReceipt({{ order.id }})">🖨️ Чек</button>
   <button class="btn btn-primary" onclick="callOrder({{ order.id }})">📢 Вызов</button>
+  <button class="btn btn-primary" onclick="callOrderEnglish({{ order.id }})">English Call</button>
   <button class="btn btn-secondary" onclick="goBack()">⬅️ Назад</button>
 </div>
+
 
   </header>
 
@@ -678,6 +680,25 @@ async function recalc(orderId) {
   } catch (e) {
     notify('Ошибка сети при пересчёте', 'error');
     setTimeout(() => { window.location.href = "/orders/"; }, 900);
+  }
+}
+async function callOrderEnglish(orderId) {
+  try {
+    const resp = await fetch(`/orders/${orderId}/call-english/`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-CSRFToken': csrftoken
+      }
+    });
+    if (resp.ok) {
+      showNotify("🔊 English announcement triggered!");
+    } else {
+      showNotify("❌ Error triggering English announcement");
+    }
+  } catch (err) {
+    console.error(err);
+    showNotify("⚠️ Network error");
   }
 }
 
