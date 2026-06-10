@@ -143,10 +143,13 @@
   <header class="topbar">
     <div class="brand">Bilal fried chiken</div>
 <div class="actions" style="margin-top: 20px; display: flex; gap: 30px; flex-wrap: wrap;">
+
   <button class="btn btn-primary" onclick="reprintReceipt({{ order.id }})">🖨️ Чек</button>
   <button class="btn btn-primary" onclick="callOrder({{ order.id }})">📢 Вызов</button>
+  <button class="btn btn-primary" onclick="callOrderKZ({{ order.id }})">📢 Вызов (Кыргызча)</button>
   <button class="btn btn-primary" onclick="callOrderEnglish({{ order.id }})">English Call</button>
   <button class="btn btn-secondary" onclick="goBack()">⬅️ Назад</button>
+  <audio id="order-audio-kz" hidden></audio>
 </div>
 
 
@@ -718,7 +721,40 @@ async function markDelivery(orderId) {
 }
 
 </script>
+<script>
+        function callOrderKyrgyz(orderId) {
+            fetch(`/orders/${orderId}/call_kyrgyz/`, {
+                method: "POST",
+                headers: {
+                    "X-CSRFToken": getCookie("csrftoken"),
+                    "Content-Type": "application/json"
+                }
+            });
+        }
 
+        function getCookie(name) {
+            let cookieValue = null;
+            if (document.cookie && document.cookie !== "") {
+                const cookies = document.cookie.split(";");
+                for (let i = 0; i < cookies.length; i++) {
+                    const cookie = cookies[i].trim();
+                    if (cookie.substring(0, name.length + 1) === (name + "=")) {
+                        cookieValue = decodeURIComponent(cookie.substring(name.length + 1));
+                        break;
+                    }
+                }
+            }
+            return cookieValue;
+        }
+    </script>
+
+<script>
+function callOrderKZ(orderId) {
+    const audio = document.getElementById("order-audio-kz");
+    audio.src = `/orders/${orderId}/call_kz/`;
+    audio.play();
+}
+</script>
 </body>
 
 <div id="payment-modal" class="modal" style="display:none;">

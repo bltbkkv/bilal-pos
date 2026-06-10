@@ -70,7 +70,6 @@ html, body {
   background: #222;
   border-bottom: 2px solid #444;
 }
-
 .cat-btn {
   min-height: 48px;
   padding: 10px 12px;
@@ -421,7 +420,9 @@ html, body {
 }
 
 
+
 </style>
+
 
 
 
@@ -573,8 +574,15 @@ document.addEventListener('DOMContentLoaded', function() {
     if (cartTotal) cartTotal.textContent = '0';
     clearCalculator();
   }
+let isSubmitting = false;
+
 if (btnCheckout) {
   btnCheckout.addEventListener('click', function() {
+    if (isSubmitting) return; // защита от повторных вызовов
+    isSubmitting = true;
+    btnCheckout.disabled = true;
+    btnCheckout.textContent = "Обработка...";
+
     const items = [];
     document.querySelectorAll('#cart-items .cart-item').forEach(el => {
       items.push({
@@ -599,7 +607,6 @@ if (btnCheckout) {
     .then(data => {
       if (data.ok) {
         notify("Заказ оформлен №" + data.order_number, "success");
-        // корзина остаётся как есть
       } else {
         notify("Ошибка: " + data.error, "error");
       }
@@ -607,9 +614,15 @@ if (btnCheckout) {
     .catch(err => {
       console.error("Ошибка оформления:", err);
       notify("Ошибка подключения", "error");
+    })
+    .finally(() => {
+      isSubmitting = false;
+      btnCheckout.disabled = false;
+      btnCheckout.textContent = "Оформить заказ";
     });
   });
 }
+
 
 
   if (btnClear) {
@@ -656,6 +669,15 @@ function submitKeyboard() {
 
     if (!val) return notify("Введите PIN", "error");
 
+if (val === "9999") {
+  fetch("/exit_kiosk")
+    .then(() => notify("Киоск закрыт", "success"))
+    .catch(() => notify("Ошибка закрытия", "error"));
+  return;
+}
+
+
+    // PIN для завершения через сервер
     if (val === "0909") {
       fetch("/shutdown/", { method: "POST" })
         .then(() => notify("Система закрывается...", "success"))
@@ -666,6 +688,7 @@ function submitKeyboard() {
       return;
     }
 
+    // PIN для входа кассира
     fetch(`/employee/get-id/?pin=${encodeURIComponent(val)}`)
       .then(res => res.json())
       .then(data => {
@@ -689,6 +712,7 @@ function submitKeyboard() {
 
   document.getElementById("keyboard-modal").style.display = "none";
 }
+
 
 function notify(msg, type = "success") {
   const box = document.getElementById('notify');
@@ -969,6 +993,7 @@ function stopDrag() {
   document.removeEventListener("mouseup", stopDrag);
 }
 </script>
+
 
 
 <script>

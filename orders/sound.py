@@ -1,6 +1,7 @@
 import torch
 import sounddevice as sd
 import threading
+import numpy as np
 
 # Загружаем русскую модель
 model_ru = torch.package.PackageImporter("models/v3_1_ru.pt").load_pickle("tts_models", "model")
@@ -8,10 +9,7 @@ model_ru = torch.package.PackageImporter("models/v3_1_ru.pt").load_pickle("tts_m
 # Загружаем англоязычную модель
 model_en = torch.package.PackageImporter("models/v3_en.pt").load_pickle("tts_models", "model")
 
-# Прогрев русской модели для уменьшения задержки при первом вызове
-_ = model_ru.apply_tts(text="тест", sample_rate=24000)
-
-# Кэш для повторяющихся фраз
+# Кэш для аудио
 cache = {}
 
 NUM_WORDS = {
@@ -52,44 +50,45 @@ def num_to_text(num: int) -> str:
 def num_to_text_en(num: int) -> str:
     return NUM_WORDS_EN.get(num, str(num))
 
+# 🔹 Прогрев моделей и драйвера звука
+def warmup():
+    # Прогрев русской модели
+    audio_ru = model_ru.apply_tts(text="тест", sample_rate=24000)
+    sd.play(audio_ru.numpy(), samplerate=24000)
+    sd.wait()
+
+    # Прогрев английской модели
+    audio_en = model_en.apply_tts(text="test", speaker="en_0", sample_rate=24000)
+    sd.play(audio_en.numpy(), samplerate=24000)
+    sd.wait()
+
+    # Прогрев sounddevice (пустой звук)
+    sd.play(np.zeros(24000), samplerate=24000)
+    sd.wait()
+
+# 🔹 Кэшируем все стандартные фразы заранее
+def preload_cache():
+    for num in range(0, 41):
+        text_ru = f"Заказ {NUM_WORDS[num]}. Пройдите на кассу!"
+        audio_ru = model_ru.apply_tts(text=text_ru, sample_rate=24000)
+        cache[text_ru] = audio_ru.numpy()
+
+        text_en = f"Order {NUM_WORDS_EN[num]}, please proceed to the cashier"
+        audio_en = model_en.apply_tts(text=text_en, speaker="en_0", sample_rate=24000)
+        cache[text_en] = audio_en.numpy()
+
 def announce(num: int):
     def _play():
-        num_text = num_to_text(num)
-        text = f"Заказ {num_text}. Пройдите на кассу!"
-
-        if text not in cache:
-            audio = model_ru.apply_tts(text=text, sample_rate=24000)
-            cache[text] = audio.numpy()
-
+        text = f"Заказ {num_to_text(num)}. Пройдите на кассу!"
         sd.play(cache[text], samplerate=24000)
-
     threading.Thread(target=_play, daemon=True).start()
 
 def announce_en(num: int):
     def _play():
-        num_text = num_to_text_en(num)
-        text = f"Order {num_text}, Please proceed to the cashier"
-
-        if not text.strip():
-            text = "Order number"
-
-        if text not in cache:
-            try:
-                audio = model_en.apply_tts(
-                    text=text,
-                    speaker="en_0",   # ✅ правильный голос
-                    sample_rate=24000
-                )
-                cache[text] = audio.numpy()
-            except ValueError:
-                audio = model_en.apply_tts(
-                    text="Order",
-                    speaker="en_0",
-                    sample_rate=24000
-                )
-                cache[text] = audio.numpy()
-
+        text = f"Order {num_to_text_en(num)}, please proceed to the cashier"
         sd.play(cache[text], samplerate=24000)
-
     threading.Thread(target=_play, daemon=True).start()
 
+# 🔹 Запускаем прогрев и предзагрузку при старте
+warmup()
+preload_cache()

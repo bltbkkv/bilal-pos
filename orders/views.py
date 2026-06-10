@@ -94,7 +94,7 @@ def submit_order(request):
         'total': str(order.total)
     })
 
-
+@csrf_exempt
 def mark_order_ready(request, order_id):
     """
     Переводим заказ в статус 'Готово'
@@ -638,14 +638,14 @@ from django.shortcuts import redirect
 from django.http import JsonResponse
 from django.db.models import Sum, F
 from django.utils import timezone
-import win32ui
+
 
 def report_receipt(request):
-    from django.db.models import Sum, F
+    from django.db.models import Sum, F, IntegerField
+    from django.db.models.functions import Coalesce
     from django.utils import timezone
     from django.http import JsonResponse
     from django.shortcuts import redirect
-    import win32ui
     from datetime import datetime
 
     PRINTER_NAME = "XP-80"
@@ -678,8 +678,11 @@ def report_receipt(request):
         OrderItem.objects.filter(order__in=active_orders, cancelled=False)
         .values("product__name", "product__price")
         .annotate(
-            total_qty=Sum("quantity"),
-            total_sales=Sum(F("price") * F("quantity")),
+            total_qty=Coalesce(Sum("quantity"), 0),
+            total_sales=Coalesce(
+                Sum(F("price") * F("quantity"), output_field=IntegerField()),
+                0
+            ),
         )
         .order_by("-total_sales")
     )
@@ -704,10 +707,17 @@ def report_receipt(request):
         x_name   = 10
         x_price  = 250
         x_qty    = 380
-        x_sales  = 480   # 🔥 сдвинули левее, чтобы не обрезалось
+        x_sales  = 480
 
         y = 20
         line_height = 28
+        max_page_height = 1000  # предел по высоте страницы
+
+        def new_page():
+            nonlocal y
+            pdc.EndPage()
+            pdc.StartPage()
+            y = 20
 
         # Вспомогательная функция для переноса длинных названий
         def draw_wrapped_text(pdc, x, y, text, max_width, line_height, font):
@@ -728,6 +738,8 @@ def report_receipt(request):
                 lines.append(current)
 
             for line in lines:
+                if y > max_page_height:
+                    new_page()
                 pdc.TextOut(x, y, line)
                 y += line_height
             return y, len(lines)
@@ -738,7 +750,6 @@ def report_receipt(request):
         pdc.TextOut(x_name, y, f"{start_date or '-'} {start_time} — {end_date or '-'} {end_time}"); y += line_height
         pdc.TextOut(x_name, y, f"Количество заказов: {count}"); y += line_height
 
-        # Итоговые суммы сразу сверху
         pdc.TextOut(x_name, y, f"Общая сумма продаж: {grand_sales:.0f} сом"); y += line_height
         y += line_height
 
@@ -751,16 +762,19 @@ def report_receipt(request):
 
         # Данные по товарам
         for item in items_sales:
-            # переносим название
-            y_before = y
-            y, lines_count = draw_wrapped_text(pdc, x_name, y, item["product__name"], x_price - x_name - 10, line_height, font)
+            if y > max_page_height:
+                new_page()
 
-            # остальные колонки печатаем на первой строке
+            y_before = y
+            y, lines_count = draw_wrapped_text(
+                pdc, x_name, y, item["product__name"],
+                x_price - x_name - 10, line_height, font
+            )
+
             pdc.TextOut(x_price, y_before, f"{item['product__price'] or 0:.0f}")
             pdc.TextOut(x_qty,   y_before, str(item["total_qty"]))
             pdc.TextOut(x_sales, y_before, f"{item['total_sales'] or 0:.0f}")
 
-            # сдвигаем вниз для следующей строки
             y += line_height
 
         pdc.EndPage()
@@ -770,10 +784,6 @@ def report_receipt(request):
         return JsonResponse({'error': f'Ошибка печати отчёта: {e}'}, status=500)
 
     return redirect("report_by_date")
-
-
-
-
 
 
 
@@ -891,8 +901,8 @@ def orders_ready_list(request):
 @require_GET
 def edit_order(request, order_id):
     order = get_object_or_404(Order, id=order_id)
-    products = Product.objects.all().order_by('category', 'name')
-    categories = Product.objects.values_list('category', flat=True).distinct()
+    products = Product.objects.filter(is_active=True).order_by('category', 'name')
+    categories = sorted(set(products.values_list('category', flat=True)))
 
     # Активные блюда — только те, что не отменены и количество > 0
     active_items = order.items.filter(cancelled=False, quantity__gt=0).select_related('product')
@@ -1093,9 +1103,6 @@ def remove_item_from_order(request, item_id):
     items, total = _recalc_and_serialize(order)
     return JsonResponse({'ok': True, 'items': items, 'total': total})
 
-
-
-
 @csrf_exempt
 @require_POST
 def recalc_order_total(request, order_id):
@@ -1133,7 +1140,6 @@ def recalc_order_total(request, order_id):
         final_diff = max(0, cur_qty - prev_qty)
 
         to_print = 0
-        # 🔹 новое блюдо → печатаем всё количество
         if it.is_new and (it.original_quantity or 0) == 0:
             to_print = cur_qty
         else:
@@ -1158,18 +1164,25 @@ def recalc_order_total(request, order_id):
 
     # печать
     if delta_items:
-        print_to_printer(
-            "XP-80C (copy 1)",
-            order.receipt_number,
-            order.order_time,
-            delta_items,
-            kitchen=True,
-            order_type="",
-            operator_name=operator_name,
-            recalc=True,
-            previous_quantities=prev_map,
-            edit_ops=edit_ops
-        )
+        # список кухонных принтеров
+        KITCHEN_PRINTERS = ["XP-80C (copy 1)", "XP-80D"]
+
+        # печать на кухню сразу на все принтеры
+        for printer in KITCHEN_PRINTERS:
+            print_to_printer(
+                printer,
+                order.receipt_number,
+                order.order_time,
+                delta_items,
+                kitchen=True,
+                order_type="",
+                operator_name=operator_name,
+                recalc=True,
+                previous_quantities=prev_map,
+                edit_ops=edit_ops
+            )
+
+        # печать на кассу
         print_to_printer(
             "XP-80",
             order.receipt_number,
@@ -1202,6 +1215,7 @@ def recalc_order_total(request, order_id):
         'total': total,
         'action': 'recalc'
     })
+
 
 def _recalc_and_serialize(order):
     items = []
@@ -1422,6 +1436,7 @@ def print_receipt_direct(order):
     # Имена принтеров
     PRINTER_CLIENT = "XP-80"
     PRINTER_KITCHEN = "XP-80C (copy 1)"
+    PRINTER_KITCHEN_2 = "XP-80D"
 
     # Тип заказа (определим из позиций)
     order_type = ""
@@ -1649,6 +1664,139 @@ def print_receipt_direct(order):
 
         # Звуковой сигнал до печати
         send_beep(PRINTER_KITCHEN)
+
+        y = 0
+        pdc.StartPage()
+
+        # Утилита центрирования (кухонный чек)
+        def draw_center_kitchen(pdc, y, text, size=36):
+            font_line = win32ui.CreateFont({"name": "Consolas", "height": size, "weight": 800})
+            pdc.SelectObject(font_line)
+            s = str(text)
+            w, _ = pdc.GetTextExtent(s)
+            x_center = (RIGHT_EDGE - margin_left) // 2 - w // 2 + margin_left
+            pdc.TextOut(x_center, y, s)
+
+        # Центрированный перенос длинных строк (кухонный чек)
+        def draw_center_wrap(pdc, y, text, size=43, max_width=RIGHT_EDGE - margin_left):
+            font_line = win32ui.CreateFont({"name": "Consolas", "height": size, "weight": 800})
+            pdc.SelectObject(font_line)
+            s = str(text)
+
+            # Токенизация по словам и разделителям
+            tokens, buf = [], []
+            for ch in s:
+                if ch.isspace() or ch in "-()":
+                    if buf:
+                        tokens.append("".join(buf)); buf = []
+                    tokens.append(ch)
+                else:
+                    buf.append(ch)
+            if buf:
+                tokens.append("".join(buf))
+
+            lines, current, i = [], "", 0
+            while i < len(tokens):
+                tok = tokens[i]
+                trial = current + tok
+                w, _ = pdc.GetTextExtent(trial)
+                if w <= max_width:
+                    current = trial
+                    i += 1
+                else:
+                    if not current.strip():
+                        cut = 1
+                        while cut <= len(tok) and pdc.GetTextExtent(tok[:cut])[0] <= max_width:
+                            cut += 1
+                        part = tok[:cut-1] if cut > 1 else tok[:1]
+                        lines.append(part)
+                        rest = tok[len(part):]
+                        if rest:
+                            tokens[i] = rest
+                        else:
+                            i += 1
+                    else:
+                        lines.append(current.strip())
+                        current = ""
+            if current.strip():
+                lines.append(current.strip())
+
+            for line in lines:
+                w, _ = pdc.GetTextExtent(line)
+                x_center = (RIGHT_EDGE - margin_left) // 2 - w // 2 + margin_left
+                pdc.TextOut(x_center, y, line)
+                y += size  # шаг вниз равен высоте шрифта
+
+            return y
+
+        # Заголовок
+        draw_center_kitchen(pdc, y, "КУХНЯ", size=48); y += 60
+        draw_center_kitchen(pdc, y, f"{order_type}", size=54); y += 65
+        draw_center_kitchen(pdc, y, f"ЗАКАЗ №{order_no}", size=64); y += 60
+        draw_center_kitchen(pdc, y, order_dt.strftime('%d.%m.%Y %H:%M'), size=36); y += 45
+        draw_center_kitchen(pdc, y, FULL_LINE, size=32); y += 40
+
+        # Печать блюд (только те, которые не из исключаемых категорий) — с переносом
+        for name, qty in printable_items:
+            y = draw_center_wrap(pdc, y, f"{name} × {qty}", size=43)
+            y += 10  # небольшой дополнительный отступ между блюдами
+
+        pdc.EndPage()
+        pdc.EndDoc()
+        pdc.DeleteDC()
+    except Exception as e:
+        print(f"Ошибка печати кухонного чека: {e}")
+
+  # ===== Кухонный чек (исключаем ряд категорий) =====
+    try:
+        # Собираем позиции с их категориями
+        kitchen_items = []
+        for item in order.items.filter(cancelled=False):
+            product = getattr(item, "product", None)
+            if not product:
+                continue
+
+            # Название категории
+            category = getattr(product, "category", None)
+            if isinstance(category, str):
+                cat_name = (category or "").strip().lower()
+            else:
+                cat_name = (getattr(category, "name", "") or "").strip().lower()
+
+            kitchen_items.append((getattr(product, "name", ""), int(item.quantity), cat_name))
+
+        # Если нет позиций — не печатаем
+        if not kitchen_items:
+            return
+
+        # Категории, которые исключаем из кухонного чека
+        excluded_categories = {
+            "чай кофе",
+            "горячие самсы",
+            "десерты",
+            "горячие напитки",
+            "напитки",
+            "соус",
+            "макаронсы",
+        }
+
+        # Если все позиции из исключаемых — не печатаем
+        if all(cat in excluded_categories for _, _, cat in kitchen_items):
+            return
+
+        # Печатаем только позиции, которые НЕ входят в исключаемые категории
+        printable_items = [
+            (name, qty) for name, qty, cat in kitchen_items
+            if cat not in excluded_categories
+        ]
+        if not printable_items:
+            return
+
+        # Печать кухонного чека
+        pdc = win32ui.CreateDC()
+        pdc.CreatePrinterDC(PRINTER_KITCHEN_2)
+        pdc.StartDoc(f"Кухонный чек №{order_no}")
+
 
         y = 0
         pdc.StartPage()
@@ -2283,7 +2431,8 @@ def print_to_printer(
                 return
 
             # Звуковой сигнал
-            send_beep(printer_name)
+            if printer_name != "XP-80D":  # отключаем Beep для второго принтера
+                send_beep(printer_name)
 
             y = 0
             draw_center(pdc, y, "КУХНЯ", size=48); y += 60
@@ -2391,8 +2540,12 @@ def recalc_order_view(request, order_id):
         if not new_items.exists():
             return JsonResponse({'ok': True, 'msg': 'Изменений нет', 'items': [], 'total': order.total})
 
-        # печать на кухню
-        print_to_printer("XP-80C (copy 1)", order.receipt_number, order.order_time, new_items, kitchen=True)
+        # список кухонных принтеров
+        KITCHEN_PRINTERS = ["XP-80C (copy 1)", "XP-80D"]
+
+        # печать на кухню сразу на все принтеры
+        for printer in KITCHEN_PRINTERS:
+            print_to_printer(printer, order.receipt_number, order.order_time, new_items, kitchen=True)
 
         # печать на кассу
         print_to_printer("XP-80", order.receipt_number, order.order_time, new_items, kitchen=False)
@@ -2400,17 +2553,23 @@ def recalc_order_view(request, order_id):
         # сбрасываем флаг is_new
         new_items.update(is_new=False)
 
-        return JsonResponse({'ok': True, 'recalc': True, 'items': [
-            {
-                "id": it.id,
-                "name": it.product.name,
-                "quantity": it.quantity,
-                "line_total": int(it.quantity * (it.price or it.product.price))
-            } for it in order.items.filter(cancelled=False)
-        ], 'total': int(order.items.filter(cancelled=False).aggregate(total=Sum(F('quantity')*F('price')))['total'] or 0)})
+        return JsonResponse({
+            'ok': True,
+            'recalc': True,
+            'items': [
+                {
+                    "id": it.id,
+                    "name": it.product.name,
+                    "quantity": it.quantity,
+                    "line_total": int(it.quantity * (it.price or it.product.price))
+                } for it in order.items.filter(cancelled=False)
+            ],
+            'total': int(order.items.filter(cancelled=False).aggregate(total=Sum(F('quantity')*F('price')))['total'] or 0)
+        })
 
     except Exception as e:
         return JsonResponse({'error': str(e)}, status=500)
+
 
 
 @require_POST
@@ -2663,6 +2822,7 @@ from .sound import announce
 from .models import Order
 
 
+
 def order_call(request, order_id):
     order = get_object_or_404(Order, id=order_id)
     try:
@@ -2706,4 +2866,38 @@ from django.shortcuts import render
 
 def reklama_view(request):
     return render(request, "reklama.html")
+
+import subprocess
+from django.http import JsonResponse
+
+def exit_kiosk(request):
+    try:
+        subprocess.run(["taskkill", "/IM", "chrome.exe", "/F"], check=True)
+        return JsonResponse({"status": "ok"})
+    except Exception as e:
+        return JsonResponse({"error": str(e)}, status=500)
+
+import os
+from django.http import JsonResponse, HttpResponse
+from django.conf import settings
+from .models import Order
+
+AUDIO_DIR = os.path.join(settings.BASE_DIR, "audio_cache")
+
+def call_order_kz(request, order_id):
+    order = Order.objects.filter(id=order_id).first()
+    if not order:
+        return JsonResponse({"ok": False, "error": "Заказ не найден"}, status=404)
+
+    num = order.receipt_number
+    filename = os.path.join(AUDIO_DIR, f"zakaz{num}.mp3")
+
+    if not os.path.exists(filename):
+        return JsonResponse({"ok": False, "error": f"Файл zakaz{num}.mp3 не найден"}, status=404)
+
+    with open(filename, "rb") as f:
+        response = HttpResponse(f.read(), content_type="audio/mpeg")
+        response["Content-Disposition"] = f'inline; filename="zakaz{num}.mp3"'
+        return response
+
 

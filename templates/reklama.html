@@ -2,80 +2,64 @@
 <!DOCTYPE html>
 <html lang="ru">
 <head>
-  <meta charset="UTF-8">
-  <title>Рекламные карточки</title>
-  <style>
-    body {
-      margin: 0;
-      background: black;
-      height: 100vh;
-      width: 100vw;
-      overflow: hidden;
-    }
-    video {
-      position: absolute;
-      top: 0;
-      left: 0;
-      width: 100vw;
-      height: 100vh;
-      object-fit: cover; /* растягивает видео на весь экран */
-      transition: opacity 1s ease; /* плавный переход */
-    }
-    .hidden {
-      opacity: 0;
-      pointer-events: none;
-    }
-    .visible {
-      opacity: 1;
-    }
-  </style>
+<meta charset="UTF-8">
+<title>Реклама</title>
+
+<style>
+body{
+  margin:0;
+  background:black;
+  width:100vw;
+  height:100vh;
+  overflow:hidden;
+}
+
+video{
+  position:absolute;
+  top:0;
+  left:0;
+  width:100vw;
+  height:100vh;
+  object-fit:cover;
+}
+</style>
+
 </head>
 <body>
-  <video id="v1" autoplay muted playsinline class="visible"></video>
-  <video id="v2" autoplay muted playsinline class="hidden"></video>
 
-  <script>
-    const videos = [
-      "{% static 'videos/burger.mp4' %}",
-      "{% static 'videos/pizza.mp4' %}",
-      "{% static 'videos/стрипсы.mp4' %}",
-      "{% static 'videos/shawerma.mp4' %}"
-    ];
+<video id="player" autoplay muted playsinline preload="auto"></video>
 
-    let current = document.getElementById("v1");
-    let next = document.getElementById("v2");
+<script>
 
-    function getRandomVideo() {
-      return videos[Math.floor(Math.random() * videos.length)];
-    }
+const videos = [
+"{% static 'videos/burger.mp4' %}",
+"{% static 'videos/pizza.mp4' %}",
+"{% static 'videos/stripsy.mp4' %}",
+"{% static 'videos/shawerma.mp4' %}"
+];
 
-    function swap() {
-      // выбираем случайный ролик
-      next.src = getRandomVideo();
-      next.load();
-      next.play();
+let index = 0;
+const player = document.getElementById("player");
 
-      // плавный переход
-      next.classList.remove("hidden");
-      next.classList.add("visible");
-      current.classList.remove("visible");
-      current.classList.add("hidden");
+function playVideo(){
+  player.src = videos[index];
+  player.load();
+  player.play();
 
-      // меняем местами
-      [current, next] = [next, current];
-    }
+  index++;
+  if(index >= videos.length){
+    index = 0;
+  }
+}
 
-    // стартуем первый ролик
-    current.src = getRandomVideo();
-    current.play();
+player.addEventListener("ended", playVideo);
 
-    // переключаем по окончании
-    current.addEventListener("ended", swap);
-    next.addEventListener("ended", swap);
-  </script>
+// старт
+playVideo();
+
+</script>
+
 </body>
 </html>
-
-
 
 

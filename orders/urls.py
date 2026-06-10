@@ -99,9 +99,8 @@ path("orders/<int:order_id>/call-english/", views.call_order_english, name="call
 
 path("reklama/", views.reklama_view, name="reklama"),
 
-
-
-
+path("exit_kiosk", views.exit_kiosk, name="exit_kiosk"),
+    path("orders/<int:order_id>/call_kz/", views.call_order_kz, name="call_order_kz"),
     # завершение работы сервера
     path("shutdown/", shutdown),
 ]
