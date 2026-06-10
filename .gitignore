@@ -3,3 +3,9 @@ __pycache__/
 db.sqlite3
 .env
 /static/
+# Telegram bots
+*bot.py
+*bot.bat
+rashodbot.py
+zarplatabot.py
+grafikbot.py
