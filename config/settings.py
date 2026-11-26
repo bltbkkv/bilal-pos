@@ -36,7 +36,11 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 SECRET_KEY = 'django-insecure-t4-u-x*=w!h2t3p_!&ovat1n^6l#=tg9)7y02hz#1+g0jm3t$o'
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = True
+# На кассе DEBUG должен быть ВЫКЛЮЧЕН: при DEBUG=True Django держит в памяти
+# все SQL-запросы с момента запуска — за смену это забивает оперативку и
+# всё начинает тормозить. Нужно включить отладку временно — запустите с
+# переменной окружения BILAL_DEBUG=1 (set BILAL_DEBUG=1 перед python manage.py).
+DEBUG = os.environ.get("BILAL_DEBUG") == "1"
 
 #ALLOWED_HOSTS = ['192.168.0.111', 'localhost', '127.0.0.1']
 ALLOWED_HOSTS = ['*']

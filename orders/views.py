@@ -319,7 +319,7 @@ def submit_order(request):
             options=p.get('options', [])
         )
 
-    print_receipt_direct(order)
+    print_receipt_async(order)
 
     # возвращаем только информацию о заказе, без items
     return JsonResponse({
@@ -1448,7 +1448,7 @@ def recalc_order_total(request, order_id):
     # печать
     if delta_items:
         # список кухонных принтеров
-        KITCHEN_PRINTERS = ["XP-80C (copy 1)", "XP-80D"]
+        KITCHEN_PRINTERS = ["XP-80C (copy 1)"]  # XP-80D не используется
 
         # печать на кухню сразу на все принтеры
         for printer in KITCHEN_PRINTERS:
@@ -1691,6 +1691,50 @@ from .models import Order
 
 
 
+
+
+# ---------------------------------------------------------------------------
+# Печать чеков в фоне.
+# Раньше print_receipt_direct() вызывался ПРЯМО внутри запроса (создание
+# заказа, повторная печать). Пока принтер печатал/был занят/выключен —
+# касса стояла и не реагировала на нажатия. Теперь чек ставится в очередь,
+# а единственный фоновый поток печатает его отдельно. Ответ кассе уходит
+# мгновенно, даже если принтер выключен или завис.
+# ---------------------------------------------------------------------------
+import threading as _threading
+import queue as _queue
+from django.db import connection as _db_connection
+
+_print_queue = _queue.Queue()
+
+
+def _print_worker():
+    while True:
+        order_id = _print_queue.get()
+        try:
+            order = Order.objects.get(id=order_id)
+            print_receipt_direct(order)
+        except Exception as e:
+            print(f"[print] Не удалось напечатать чек заказа {order_id}: {e}")
+        finally:
+            # у фонового потока своё соединение с БД — закрываем, чтобы не копить
+            try:
+                _db_connection.close()
+            except Exception:
+                pass
+            _print_queue.task_done()
+
+
+_threading.Thread(target=_print_worker, daemon=True, name="receipt-printer").start()
+
+
+def print_receipt_async(order):
+    """Ставит печать чека в очередь и сразу возвращает управление.
+    Касса не зависнет, даже если принтер выключен, занят или сломан."""
+    try:
+        _print_queue.put_nowait(getattr(order, "id", order))
+    except Exception as e:
+        print(f"[print] Не удалось поставить чек в очередь: {e}")
 
 
 def print_receipt_direct(order):
@@ -2076,7 +2120,10 @@ def print_receipt_direct(order):
         if not printable_items:
             return
 
-        # Печать кухонного чека
+        # Принтер XP-80D не используется — второй кухонный чек не печатаем.
+        return
+
+        # (код печати на XP-80D отключён)
         pdc = win32ui.CreateDC()
         pdc.CreatePrinterDC(PRINTER_KITCHEN_2)
         pdc.StartDoc(f"Кухонный чек №{order_no}")
@@ -2173,7 +2220,7 @@ def print_receipt_direct(order):
 
 def print_receipt_view(request, order_id):
     order = get_object_or_404(Order, id=order_id)
-    print_receipt_direct(order)   # печать чека
+    print_receipt_async(order)   # печать чека (в фоне, касса не ждёт принтер)
     order.status = 'pending'      # 🔹 оставляем заказ в списке "Заказы"
     order.save()
     return JsonResponse({'ok': True, 'order_id': order.id, 'status': order.status})
@@ -2206,7 +2253,7 @@ def reprint_receipt_view(request, order_id):
     """
     order = get_object_or_404(Order, id=order_id)
     try:
-        print_receipt_direct(order)
+        print_receipt_async(order)
         return JsonResponse({'ok': True, 'reprinted': True})
     except Exception as e:
         import traceback
@@ -2861,7 +2908,7 @@ def recalc_order_view(request, order_id):
             return JsonResponse({'ok': True, 'msg': 'Изменений нет', 'items': [], 'total': order.total})
 
         # список кухонных принтеров
-        KITCHEN_PRINTERS = ["XP-80C (copy 1)", "XP-80D"]
+        KITCHEN_PRINTERS = ["XP-80C (copy 1)"]  # XP-80D не используется
 
         # печать на кухню сразу на все принтеры
         for printer in KITCHEN_PRINTERS:
@@ -3261,7 +3308,7 @@ def call_order_kz(request, order_id):
 
 # ===== Проверка состояния системы (для удалённой диагностики) =====
 APP_VERSION = "2026.11.06"   # менять при каждой выкладке обновления
-REQUIRED_PRINTERS = ["XP-80", "XP-80C (copy 1)", "XP-80D"]
+REQUIRED_PRINTERS = ["XP-80", "XP-80C (copy 1)"]  # XP-80D не используется
 
 def health(request):
     """Открывать на самом моноблоке: http://localhost:8000/health/
