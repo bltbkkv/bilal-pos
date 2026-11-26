@@ -123,3 +123,4 @@ vosk-tts==0.3.61
 websockets==15.0.1
 yarl==1.22.0
 zstandard==0.25.0
+ntplib==0.4.0

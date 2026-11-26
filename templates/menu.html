@@ -12,8 +12,8 @@
 html, body {
   margin: 0;
   padding: 0;
-  width: 1024px;
-  height: 768px;
+  width: 100%;
+  height: 100%;
   font-family: 'Segoe UI', sans-serif;
   background: #1e1e1e;
   color: #f0f0f0;
@@ -24,10 +24,12 @@ html, body {
 .layout {
   display: flex;
   flex-direction: column;
-  width: 1024px;
-  height: 768px;
+  width: 100%;
+  height: 100vh;
+  height: 100dvh; /* учитывает динамические панели браузера там, где это поддерживается */
 }
 .topbar {
+  flex-shrink: 0;
   height: 60px;
   background: #222;
   color: #fff;
@@ -37,13 +39,15 @@ html, body {
   align-items: center;
 }
 .content {
+  flex: 1;
+  min-height: 0; /* критично для flex-контейнеров со скроллом внутри */
   display: flex;
-  height: calc(768px - 60px);
 }
 
 /* Левая колонка */
 .left {
-  width: 724px;
+  flex: 1;
+  min-width: 0; /* не даёт длинным названиям блюд распирать колонку */
   padding: 8px;
   display: flex;
   flex-direction: column;
@@ -83,9 +87,11 @@ html, body {
   word-break: break-word;
 }
 
-/* Контейнер для блюд */
+/* Контейнер для блюд — просто занимает всё, что осталось после категорий,
+   какой бы ни была реальная высота topbar/categories на данном экране */
 .product-scroll {
-  max-height: calc(768px - 60px - 190px - 16px); /* высота экрана - topbar - категории - отступы */
+  flex: 1;
+  min-height: 0;
   overflow-y: auto;
 }
 
@@ -147,7 +153,8 @@ html, body {
 
 /* Правая колонка: корзина */
 .cart-panel {
-  width: 300px;
+  width: clamp(240px, 28vw, 340px);
+  flex-shrink: 0;
   background: #2a2a2a;
   display: flex;
   flex-direction: column;
@@ -456,7 +463,7 @@ html, body {
 
   <main class="content">
     <section class="left">
-      <div class="categories">
+      <div class="categories" id="categories-container">
         {% for cat in categories %}
           <button class="cat-btn" data-cat="{{ cat }}">{{ cat|title }}</button>
         {% empty %}
@@ -468,11 +475,10 @@ html, body {
         <div class="grid" id="product-grid">
           {% for p in products %}
           <div class="item"
-     draggable="true"
      data-category="{{ p.category }}"
      data-id="{{ p.id }}"
      data-name="{{ p.name }}"
-     data-price="{{ p.price }}">
+     data-price="{{ p.price|stringformat:'0.2f' }}">
   <img src="{% if p.image %}{{ p.image.url }}{% else %}{% static 'images/placeholder.jpg' %}{% endif %}" alt="{{ p.name }}">
   <div class="item-name">{{ p.name }}</div>
   <div class="item-price">{{ p.price }} сом</div>
@@ -488,7 +494,18 @@ html, body {
         <h2>Корзина</h2>
         <ul id="cart-items"></ul>
 
+        <div id="cart-discount" style="display:none; color:#2e7d32; font-weight:600; margin-top:6px;">
+          Скидка: −<span id="cart-discount-amount">0</span> сом <small id="cart-discount-note" style="font-weight:400"></small>
+        </div>
         <div class="cart-total">Итого: <span id="cart-total">0</span> сом</div>
+
+        <details style="margin:8px 0;">
+          <summary style="cursor:pointer;">Скидка вручную (админ)</summary>
+          <div style="display:flex; gap:6px; margin-top:6px;">
+            <input id="manual-percent" type="number" inputmode="numeric" min="0" max="100" placeholder="% скидки" style="width:50%;" oninput="scheduleDiscountRefresh()">
+            <input id="manual-pin" type="password" inputmode="numeric" placeholder="PIN админа" style="width:50%;" oninput="scheduleDiscountRefresh()">
+          </div>
+        </details>
 
         <div class="cash-box">
           <label for="cashGiven">Получено от клиента:</label>
@@ -513,125 +530,6 @@ html, body {
 </script>
 
 <script>
-(function() {
-  function updateChange() {
-    const cashInput = document.getElementById('cashGiven');
-    const changeSpan = document.getElementById('changeAmount');
-    const totalSpan = document.getElementById('cart-total');
-
-    if (!cashInput || !changeSpan || !totalSpan) return;
-
-    const totalText = (totalSpan.textContent || '').replace(/[^\d.-]/g, '');
-    const total = parseFloat(totalText) || 0;
-    const cash = parseFloat(cashInput.value) || 0;
-    const change = cash - total;
-
-    changeSpan.textContent = change.toFixed(2);
-
-    if (change >= 0) {
-      changeSpan.classList.add('positive');
-      changeSpan.classList.remove('negative');
-    } else {
-      changeSpan.classList.add('negative');
-      changeSpan.classList.remove('positive');
-    }
-  }
-
-  document.addEventListener('DOMContentLoaded', function() {
-    const cashInput = document.getElementById('cashGiven');
-    if (cashInput) {
-      cashInput.addEventListener('input', updateChange);
-    }
-
-    const cartTotal = document.getElementById('cart-total');
-    if (cartTotal) {
-      const observer = new MutationObserver(updateChange);
-      observer.observe(cartTotal, { childList: true });
-    }
-
-    updateChange();
-  });
-})();
-
-document.addEventListener('DOMContentLoaded', function() {
-  const btnCheckout = document.getElementById('btn-checkout');
-  const btnClear = document.getElementById('btn-clear');
-  const cashInput = document.getElementById('cashGiven');
-  const changeSpan = document.getElementById('changeAmount');
-  const cartItems = document.getElementById('cart-items');
-  const cartTotal = document.getElementById('cart-total');
-
-  function clearCalculator() {
-    if (cashInput) cashInput.value = '';
-    if (changeSpan) {
-      changeSpan.textContent = '0';
-      changeSpan.classList.remove('positive', 'negative');
-    }
-  }
-
-  function clearCart() {
-    if (cartItems) cartItems.innerHTML = '';
-    if (cartTotal) cartTotal.textContent = '0';
-    clearCalculator();
-  }
-let isSubmitting = false;
-
-if (btnCheckout) {
-  btnCheckout.addEventListener('click', function() {
-    if (isSubmitting) return; // защита от повторных вызовов
-    isSubmitting = true;
-    btnCheckout.disabled = true;
-    btnCheckout.textContent = "Обработка...";
-
-    const items = [];
-    document.querySelectorAll('#cart-items .cart-item').forEach(el => {
-      items.push({
-        id: el.dataset.id,
-        qty: el.dataset.qty,
-        price: el.dataset.price
-      });
-    });
-
-    const payload = {
-      employee_id: document.getElementById('pin-input')?.value || 1,
-      items: items,
-      note: document.getElementById('order-note')?.value || ''
-    };
-
-    fetch("/orders/submit/", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload)
-    })
-    .then(res => res.json())
-    .then(data => {
-      if (data.ok) {
-        notify("Заказ оформлен №" + data.order_number, "success");
-      } else {
-        notify("Ошибка: " + data.error, "error");
-      }
-    })
-    .catch(err => {
-      console.error("Ошибка оформления:", err);
-      notify("Ошибка подключения", "error");
-    })
-    .finally(() => {
-      isSubmitting = false;
-      btnCheckout.disabled = false;
-      btnCheckout.textContent = "Оформить заказ";
-    });
-  });
-}
-
-
-
-  if (btnClear) {
-    btnClear.addEventListener('click', function() {
-      clearCart();
-    });
-  }
-});
-
 let currentTarget = null;
 
 function openKeyboard(target) {
@@ -671,7 +569,7 @@ function submitKeyboard() {
 
 if (val === "9999") {
   fetch("/exit_kiosk")
-    .then(() => notify("Киоск закрыт", "success"))
+    .then(r => { if (!r.ok) throw new Error("denied"); notify("Киоск закрыт", "success"); })
     .catch(() => notify("Ошибка закрытия", "error"));
   return;
 }
@@ -680,7 +578,7 @@ if (val === "9999") {
     // PIN для завершения через сервер
     if (val === "0909") {
       fetch("/shutdown/", { method: "POST" })
-        .then(() => notify("Система закрывается...", "success"))
+        .then(r => { if (!r.ok) throw new Error("denied"); notify("Система закрывается...", "success"); })
         .catch(err => {
           console.error("Ошибка при завершении:", err);
           notify("Ошибка завершения", "error");
@@ -822,7 +720,8 @@ window.addEventListener('load', () => {
 .keyboard-panel {
   position: fixed;
   bottom: 0; left: 0;
-  width: 600px;
+  width: min(600px, 92vw);
+  max-width: 92vw;
   background: #2c2c2c;
   padding: 10px;
   border: 2px solid #444;
@@ -996,51 +895,105 @@ function stopDrag() {
 
 
 
+<!-- SortableJS — в отличие от нативного HTML5 drag-and-drop, надёжно работает
+     и мышью, и пальцем на тач-экранах (моноблок). forceFallback:true отключает
+     использование браузерного HTML5 DnD API (который на touch-устройствах
+     поддерживается плохо/непредсказуемо) и заставляет библиотеку рисовать
+     перетаскивание самостоятельно через pointer/touch-события. -->
+<!-- Sortable грузится динамически (см. ниже), чтобы отсутствие интернета не блокировало страницу -->
+
 <script>
-let draggedItem = null;
+// Загружаем SortableJS НЕ блокирующим способом: сначала локальный файл
+// static/js/Sortable.min.js, если его нет — CDN. Если нет ни того, ни другого
+// (например, в филиале нет интернета) — меню продолжает работать, просто без
+// перетаскивания блюд/категорий.
+function loadSortable(urls, done) {
+  if (typeof Sortable !== 'undefined') { done(); return; }
+  if (!urls.length) { console.warn('SortableJS не загружен — перетаскивание отключено'); return; }
+  const el = document.createElement('script');
+  el.src = urls[0];
+  el.onload = done;
+  el.onerror = () => loadSortable(urls.slice(1), done);
+  document.head.appendChild(el);
+}
+function initSortable() {
+  const grid = document.getElementById('product-grid');
+  if (grid) {
+    Sortable.create(grid, {
+      animation: 150,
+      forceFallback: true,
+      fallbackTolerance: 3,       // небольшой порог, чтобы обычный тап не воспринимался как драг
+      delay: 150,                 // небольшая задержка перед стартом драга на touch — отличает "перетащить" от "проскроллить"
+      delayOnTouchOnly: true,
+      touchStartThreshold: 5,
+      // Не даём переносить блюдо в другую категорию — та же защита,
+      // что была в исходной логике на нативном DnD
+      onMove: function (evt) {
+        return evt.dragged.dataset.category === evt.related.dataset.category;
+      },
+      onEnd: function (evt) {
+        const category = evt.item.dataset.category;
+        const newOrder = Array.from(grid.children)
+          .filter(el => el.dataset && el.dataset.category === category)
+          .map(el => el.dataset.id);
 
-document.addEventListener('DOMContentLoaded', () => {
-  document.querySelectorAll('.item').forEach(card => {
-    card.addEventListener('dragstart', e => {
-      draggedItem = card;
-      e.dataTransfer.effectAllowed = 'move';
-    });
-
-    card.addEventListener('dragover', e => {
-      e.preventDefault();
-      e.dataTransfer.dropEffect = 'move';
-    });
-
-    card.addEventListener('drop', e => {
-      e.preventDefault();
-      if (draggedItem && draggedItem !== card) {
-        const grid = card.closest('.grid');
-        if (draggedItem.dataset.category === card.dataset.category) {
-          const draggedIndex = Array.from(grid.children).indexOf(draggedItem);
-          const targetIndex = Array.from(grid.children).indexOf(card);
-
-          if (draggedIndex < targetIndex) {
-            grid.insertBefore(draggedItem, card.nextSibling);
-          } else {
-            grid.insertBefore(draggedItem, card);
+        fetch("{% url 'update_dish_order' %}", {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-CSRFToken': '{{ csrf_token }}' },
+          body: JSON.stringify({ category: category, order: newOrder })
+        }).catch(() => {
+          const box = document.getElementById('notify');
+          if (box) {
+            box.textContent = 'Не удалось сохранить порядок блюд';
+            box.className = 'notify error show';
+            setTimeout(() => { box.className = 'notify'; }, 2000);
           }
-
-          // Отправляем новый порядок на сервер
-          const newOrder = Array.from(grid.children)
-            .filter(el => el.dataset.category === card.dataset.category)
-            .map(el => el.dataset.id);
-
-          fetch("{% url 'update_dish_order' %}", {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', 'X-CSRFToken': '{{ csrf_token }}' },
-            body: JSON.stringify({ category: card.dataset.category, order: newOrder })
-          });
-        }
+        });
       }
     });
-  });
+  }
+
+  const catContainer = document.getElementById('categories-container');
+  if (catContainer) {
+    Sortable.create(catContainer, {
+      animation: 150,
+      forceFallback: true,
+      fallbackTolerance: 3,
+      delay: 150,
+      delayOnTouchOnly: true,
+      touchStartThreshold: 5,
+      filter: 'p', // текст "Категории не найдены" (если категорий нет) не должен быть draggable
+      onEnd: function () {
+        const newOrder = Array.from(catContainer.querySelectorAll('.cat-btn')).map(el => el.dataset.cat);
+
+        fetch("{% url 'update_category_order' %}", {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-CSRFToken': '{{ csrf_token }}' },
+          body: JSON.stringify({ order: newOrder })
+        }).catch(() => {
+          const box = document.getElementById('notify');
+          if (box) {
+            box.textContent = 'Не удалось сохранить порядок категорий';
+            box.className = 'notify error show';
+            setTimeout(() => { box.className = 'notify'; }, 2000);
+          }
+        });
+      }
+    });
+  }
+}
+document.addEventListener('DOMContentLoaded', () => {
+  loadSortable([
+    "{% static 'js/Sortable.min.js' %}",
+    'https://cdnjs.cloudflare.com/ajax/libs/Sortable/1.15.2/Sortable.min.js'
+  ], initSortable);
 });
 </script>
+<style>
+.cat-btn { cursor: grab; }
+.sortable-ghost { opacity: 0.4; }
+.sortable-chosen { outline: 2px solid #ffc107; }
+</style>
 
 
 

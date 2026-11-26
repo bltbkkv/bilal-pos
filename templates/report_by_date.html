@@ -87,6 +87,21 @@
       border-radius: 4px;
       padding: 4px;
     }
+    /* Свои выпадающие списки вместо встроенных календаря/часов браузера:
+       встроенное всплывающее окно выбора даты на слабом моноблоке роняет
+       вкладку с ошибкой "Out of memory". Обычные <select> такого не делают. */
+    .dt-row { display: flex; gap: 8px; }
+    .dt-row select {
+      flex: 1;
+      min-width: 0;
+      padding: 10px;
+      font-size: 20px;
+      height: 50px;
+      border: 2px solid #555;
+      border-radius: 6px;
+      background: #1a1a1a;
+      color: #f0f0f0;
+    }
     .filter-box button {
       width: 100%;
       padding: 16px;
@@ -105,6 +120,16 @@
       background: #2c2c2c;
       padding: 16px;
       border-radius: 10px;
+    }
+
+    .clock-warning {
+      background: #4a3200;
+      border: 2px solid #ffc107;
+      color: #ffe08a;
+      padding: 12px 16px;
+      border-radius: 8px;
+      margin-bottom: 16px;
+      font-size: 16px;
     }
 
     .modal {
@@ -168,9 +193,7 @@
 
       <!-- Кнопка модалки прибыли -->
       <button type="button" onclick="openProfitModal()">Прибыль по товарам</button>
-      <button type="button" class="btn btn-info" data-bs-toggle="modal" data-bs-target="#ingredientsModal">
-  Остатки ингредиентов
-</button>
+      <button type="button" onclick="openIngredientsModal()">Остатки ингредиентов</button>
 
 
 
@@ -189,6 +212,10 @@
   </header>
 
   <div class="container">
+    {% if clock_drift_warning %}
+      <div class="clock-warning">{{ clock_drift_warning }}</div>
+    {% endif %}
+
     <form method="post" class="filter-box">
       {% csrf_token %}
       {% if login_required %}
@@ -202,19 +229,19 @@
         <div class="grid">
           <div>
             <label>Начало даты:</label>
-            <input type="date" id="start-date" name="start" value="{{ start_date }}">
+            <input type="hidden" class="dt-picker" data-kind="date" id="start-date" name="start" value="{{ start_date|default:default_start }}">
           </div>
           <div>
             <label>Конец даты:</label>
-            <input type="date" id="end-date" name="end" value="{{ end_date }}">
+            <input type="hidden" class="dt-picker" data-kind="date" id="end-date" name="end" value="{{ end_date|default:default_end }}">
           </div>
           <div>
             <label>Начало времени:</label>
-            <input type="time" id="start-time" name="start_time" value="{{ start_time }}">
+            <input type="hidden" class="dt-picker" data-kind="time" id="start-time" name="start_time" value="{{ start_time|default:default_start_time }}">
           </div>
           <div>
             <label>Конец времени:</label>
-            <input type="time" id="end-time" name="end_time" value="{{ end_time }}">
+            <input type="hidden" class="dt-picker" data-kind="time" id="end-time" name="end_time" value="{{ end_time|default:default_end_time }}">
           </div>
         </div>
         <button type="submit">Сформировать отчёт</button>
@@ -226,6 +253,7 @@
       <div class="summary">
         <p>Количество заказов: <strong>{{ count }}</strong></p>
         <p>Общая сумма: <strong>{{ total }} сом</strong></p>
+        {% if discount_total %}<p>Из них отдано скидками: <strong>{{ discount_total }} сом</strong></p>{% endif %}
         <p>Общая прибыль: <strong>{{ profit }} сом</strong></p>
       </div>
     {% endif %}
@@ -301,6 +329,19 @@
   </div>
 </div>
 
+  <script>
+    // Диапазон по умолчанию, посчитанный на СЕРВЕРЕ доверенным временем
+    // (см. trusted_time.py), а не через new Date() в браузере — иначе
+    // кнопка "По умолчанию" наследует ту же проблему: браузер тоже
+    // читает системные часы того же самого моноблока, которые могли
+    // подкрутить руками.
+    window.serverDefaults = {
+      start: "{{ default_start|default:'' }}",
+      end: "{{ default_end|default:'' }}",
+      startTime: "{{ default_start_time|default:'07:00' }}",
+      endTime: "{{ default_end_time|default:'05:00' }}"
+    };
+  </script>
 
   <script>
     // Открытие/закрытие модалок
@@ -313,17 +354,38 @@
     function openCancelModal() {
       document.getElementById("cancelModal").style.display = "block";
     }
+    function openIngredientsModal() {
+      document.getElementById("ingredientsModal").style.display = "block";
+    }
+    function closeIngredientsModal() {
+      document.getElementById("ingredientsModal").style.display = "none";
+    }
     function closeCancelModal() {
       document.getElementById("cancelModal").style.display = "none";
     }
 
     // Диапазон по умолчанию
-    function setDefaultRange() {
+    function _setDefaultRangeRaw() {
+      const d = window.serverDefaults;
+
+      if (d && d.start && d.end) {
+        // Хороший случай: сервер прислал доверенные даты (Бишкек, NTP)
+        document.getElementById('start-date').value = d.start;
+        document.getElementById('end-date').value = d.end;
+        document.getElementById('start-time').value = d.startTime || '07:00';
+        document.getElementById('end-time').value = d.endTime || '05:00';
+        return;
+      }
+
+      // Фолбэк на случай, если view ещё не прокинул default_start/default_end
+      // в контекст (см. инструкцию к файлу). Использует часы браузера —
+      // то есть подвержен той же проблеме, но лучше, чем совсем ничего.
+      console.warn('serverDefaults не заданы — используются часы браузера. ' +
+                    'Добавьте default_start/default_end в контекст view report_by_date.');
       const now = new Date();
       const yyyy = now.getFullYear();
       const mm = String(now.getMonth() + 1).padStart(2, '0');
       const dd = String(now.getDate()).padStart(2, '0');
-
       const today = `${yyyy}-${mm}-${dd}`;
 
       const tomorrow = new Date(now);
@@ -335,9 +397,101 @@
 
       document.getElementById('start-date').value = today;
       document.getElementById('end-date').value = nextDay;
-      document.getElementById('start-time').value = '09:00';
-      document.getElementById('end-time').value = '02:00';
+      document.getElementById('start-time').value = '07:00';
+      document.getElementById('end-time').value = '05:00';
     }
+
+    // Кнопка "По умолчанию": сначала ставим значения в скрытые поля,
+    // потом обновляем выпадающие списки, чтобы они показывали то же самое
+    function setDefaultRange() {
+      _setDefaultRangeRaw();
+      refreshPickers();
+    }
+
+    // ===== Свои выбиралки даты/времени (вместо <input type=date|time>) =====
+    // Настоящее значение по-прежнему лежит в скрытых полях с теми же id/name
+    // (start-date, end-date, start-time, end-time), поэтому форма и
+    // printCancelledReceipt() работают как раньше.
+    const MONTHS = ['янв','фев','мар','апр','май','июн','июл','авг','сен','окт','ноя','дек'];
+    const pad2 = n => String(n).padStart(2, '0');
+
+    function makeSelect(options, value) {
+      const sel = document.createElement('select');
+      options.forEach(([val, text]) => {
+        const o = document.createElement('option');
+        o.value = val; o.textContent = text;
+        sel.appendChild(o);
+      });
+      sel.value = value;
+      return sel;
+    }
+
+    function buildPicker(hidden) {
+      const kind = hidden.dataset.kind;
+      const row = document.createElement('div');
+      row.className = 'dt-row';
+      hidden._row = row;
+
+      if (kind === 'date') {
+        const cur = hidden.value || (window.serverDefaults && window.serverDefaults.start) || '';
+        let baseYear = parseInt(cur.slice(0, 4), 10) || new Date().getFullYear();
+        const years = [];
+        for (let y = baseYear - 3; y <= baseYear + 1; y++) years.push([String(y), String(y)]);
+        const days = []; for (let d = 1; d <= 31; d++) days.push([pad2(d), String(d)]);
+        const months = MONTHS.map((m, i) => [pad2(i + 1), m]);
+        const dSel = makeSelect(days, '01');
+        const mSel = makeSelect(months, '01');
+        const ySel = makeSelect(years, String(baseYear));
+        row.append(dSel, mSel, ySel);
+        hidden._sels = [dSel, mSel, ySel];
+        const onChange = () => {
+          const y = parseInt(ySel.value, 10), m = parseInt(mSel.value, 10);
+          const maxDay = new Date(y, m, 0).getDate();   // сколько дней в выбранном месяце
+          if (parseInt(dSel.value, 10) > maxDay) dSel.value = pad2(maxDay);
+          hidden.value = `${ySel.value}-${mSel.value}-${dSel.value}`;
+        };
+        row.addEventListener('change', onChange);
+      } else {
+        const hours = []; for (let h = 0; h < 24; h++) hours.push([pad2(h), pad2(h)]);
+        const mins = []; for (let m = 0; m < 60; m++) mins.push([pad2(m), pad2(m)]);
+        const hSel = makeSelect(hours, '00');
+        const mSel = makeSelect(mins, '00');
+        row.append(hSel, mSel);
+        hidden._sels = [hSel, mSel];
+        row.addEventListener('change', () => { hidden.value = `${hSel.value}:${mSel.value}`; });
+      }
+      hidden.after(row);
+      syncPicker(hidden);
+    }
+
+    // Подтягиваем выпадающие списки из значения скрытого поля
+    function syncPicker(hidden) {
+      const v = hidden.value || '';
+      if (hidden.dataset.kind === 'date') {
+        const m = v.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+        if (!m) return;
+        const [dSel, mSel, ySel] = hidden._sels;
+        if (![...ySel.options].some(o => o.value === m[1])) {
+          const o = document.createElement('option');
+          o.value = m[1]; o.textContent = m[1];
+          ySel.appendChild(o);
+        }
+        ySel.value = m[1]; mSel.value = m[2]; dSel.value = m[3];
+      } else {
+        const m = v.match(/^(\d{1,2}):(\d{2})/);
+        if (!m) return;
+        const [hSel, mSel] = hidden._sels;
+        hSel.value = pad2(parseInt(m[1], 10)); mSel.value = m[2];
+      }
+    }
+
+    function refreshPickers() {
+      document.querySelectorAll('input.dt-picker').forEach(syncPicker);
+    }
+
+    document.addEventListener('DOMContentLoaded', () => {
+      document.querySelectorAll('input.dt-picker').forEach(buildPicker);
+    });
 
     // Печать чека отмен — передаём выбранный диапазон
     function printCancelledReceipt() {
@@ -373,19 +527,11 @@
 
 
 
-<div class="modal fade" id="ingredientsModal" tabindex="-1" aria-labelledby="ingredientsModalLabel" aria-hidden="true">
-  <div class="modal-dialog modal-lg">
-    <div class="modal-content">
-      <div class="modal-header">
-
-        <div style="text-align: right; margin-top: 20px;">
-  <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">
-    Назад
-  </button>
-</div>
-
-      </div>
-      <div class="modal-body">
+<div id="ingredientsModal" class="modal">
+  <div class="modal-content">
+    <span class="close" onclick="closeIngredientsModal()">&times;</span>
+    <h2>Остатки ингредиентов</h2>
+    <div class="modal-body">
         <table class="table table-striped">
 
           <thead>
@@ -400,31 +546,27 @@
             {% for row in ingredients_rows %}
             <tr>
               <td>{{ row.name }}</td>
-              <td class="used">{{ row.used }}</td>
+              <td class="used">{{ row.used|stringformat:'.2f' }}</td>
               <td>
                 <input type="number" class="form-control delivered-input"
-                       value="{{ row.delivered }}" min="0" step="0.01">
+                       value="{{ row.delivered|stringformat:'.2f' }}" min="0" step="0.01">
               </td>
               <td class="left">{{ row.left }}</td>
             </tr>
             {% endfor %}
           </tbody>
         </table>
-      </div>
     </div>
   </div>
 </div>
 
-
-
-<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
 
 <script>
 document.addEventListener('DOMContentLoaded', () => {
   document.querySelectorAll('#ingredientsModal .delivered-input').forEach(input => {
     input.addEventListener('input', () => {
       const row = input.closest('tr');
-      const used = parseFloat(row.querySelector('.used').textContent) || 0;
+      const used = parseFloat(row.querySelector('.used').textContent.replace(',', '.')) || 0;
       const delivered = parseFloat(input.value) || 0;
       let left = delivered - used;
       if (left < 0) left = 0;

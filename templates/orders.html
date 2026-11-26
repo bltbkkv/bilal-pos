@@ -184,7 +184,7 @@
       }
       cell.className = 'order-cell ' + statusClass;
 
-      cell.querySelector('.order-label').textContent = 'Заказ №' + order.receipt_number;
+      cell.querySelector('.order-label').textContent = 'Заказ №' + (order.receipt_number ?? '—');
       cell.querySelector('.order-name').textContent = order.note || '';
       const actions = cell.querySelector('.cell-actions');
       cell.onclick = () => window.location.href = `/orders/${order.id}/edit/`;
@@ -225,14 +225,19 @@
         {% for order in orders %}
         {
           id: {{ order.id }},
-          receipt_number: {{ order.receipt_number }},
-          total: {{ order.total }},
+          receipt_number: "{{ order.receipt_number|default_if_none:'' }}",
+          total: "{{ order.total|default_if_none:'' }}",
           is_paid: {{ order.is_paid|yesno:"true,false" }},
           order_type: "{{ order.order_type|default_if_none:'' }}",
           note: "{{ order.note|default_if_none:''|escapejs }}"
         }{% if not forloop.last %},{% endif %}
         {% endfor %}
       ];
+      // Числа шли строками (см. комментарий выше) — приводим обратно к числу/null здесь
+      ordersData.forEach(o => {
+        o.receipt_number = o.receipt_number ? parseInt(String(o.receipt_number).replace(/[^\d]/g, ''), 10) : null;
+        o.total = o.total ? parseFloat(String(o.total).replace(/[^\d.]/g, '')) : null;
+      });
       (function fillGrid() {
         const cells = Array.from(document.querySelectorAll('.order-cell'));
         const count = Math.min(cells.length, ordersData.length);
@@ -247,6 +252,12 @@
   </div>
 </body>
 </html>
+
+
+
+
+
+
 
 
 

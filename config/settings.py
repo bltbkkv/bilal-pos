@@ -41,11 +41,6 @@ DEBUG = True
 #ALLOWED_HOSTS = ['192.168.0.111', 'localhost', '127.0.0.1']
 ALLOWED_HOSTS = ['*']
 
-CSRF_TRUSTED_ORIGINS = [
-    "http://192.168.0.50:8000",
-]
-
-
 
 
 # Application definition
@@ -127,7 +122,7 @@ AUTH_PASSWORD_VALIDATORS = [
 # Internationalization
 # https://docs.djangoproject.com/en/6.0/topics/i18n/
 
-LANGUAGE_CODE = 'en-us'
+LANGUAGE_CODE = 'ru'
 
 TIME_ZONE = "Asia/Bishkek"
 

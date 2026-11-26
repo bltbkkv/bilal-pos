@@ -33,12 +33,58 @@ function renderCart() {
     list.appendChild(li);
   });
   totalNode.textContent = fmt(total);
+  scheduleDiscountRefresh();
+}
+
+// 🏷 Скидки: сервер считает акции и ручную скидку, касса только показывает
+let _discTimer = null;
+function scheduleDiscountRefresh() {
+  clearTimeout(_discTimer);
+  _discTimer = setTimeout(refreshDiscount, 200);
+}
+function manualDiscountFields() {
+  const p = document.getElementById('manual-percent');
+  const pin = document.getElementById('manual-pin');
+  return { manual_percent: p ? p.value.trim() : '', manual_pin: pin ? pin.value.trim() : '' };
+}
+async function refreshDiscount() {
+  const totalNode = document.getElementById('cart-total');
+  const row = document.getElementById('cart-discount');
+  if (!totalNode) return;
+  if (!cart.length) {
+    if (row) row.style.display = 'none';
+    return;
+  }
+  try {
+    const res = await fetch('/orders/discount-preview/', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-CSRFToken': csrftoken },
+      body: JSON.stringify({
+        items: cart.map(i => ({ id: i.id, price: i.price, qty: i.qty })),
+        ...manualDiscountFields()
+      })
+    });
+    const data = await res.json();
+    if (!res.ok || !data.ok) {
+      if (row) row.style.display = 'none';
+      if (data && data.error) notify(data.error, "error");
+      return;
+    }
+    totalNode.textContent = fmt(data.total);
+    if (row) {
+      const has = Number(data.discount) > 0;
+      row.style.display = has ? '' : 'none';
+      document.getElementById('cart-discount-amount').textContent = Number(data.discount).toFixed(0);
+      document.getElementById('cart-discount-note').textContent = data.note || '';
+    }
+    if (window.updateChange) window.updateChange();
+  } catch (e) { /* нет связи с сервером — остаётся сумма без скидки */ }
 }
 
 function addToCart(id, name, price) {
   const existing = cart.find(i => i.id === id);
   if (existing) existing.qty += 1;
-  else cart.push({ id, name, price: Number(price), qty: 1 });
+  else cart.push({ id, name, price: Number(String(price).replace(',', '.')), qty: 1 });
   renderCart();
 }
 function incQty(id) {
@@ -56,6 +102,7 @@ function removeItem(id) {
 }
 function clearCart() {
   cart = [];
+  ['manual-percent', 'manual-pin'].forEach(id => { const el = document.getElementById(id); if (el) el.value = ''; });
   renderCart();
 }
 
@@ -85,21 +132,32 @@ function getCookie(name) {
 const csrftoken = getCookie('csrftoken');
 
 // 🧾 Оформление заказа
+let _checkoutBusy = false;
 async function checkout() {
+  // защита от двойного нажатия: пока идёт печать, второй заказ не создаётся
+  if (_checkoutBusy) return;
+  _checkoutBusy = true;
+  const btn = document.getElementById('btn-checkout');
+  if (btn) btn.disabled = true;
+  try { await _checkoutInner(); }
+  finally { _checkoutBusy = false; if (btn) btn.disabled = false; }
+}
+async function _checkoutInner() {
   if (!cart.length) return notify('Корзина пустая', "error");
   if (!window.EMPLOYEE_ID) return notify('Сначала войдите кассиром', "error");
 
   const note = document.getElementById('order-note').value || '';
-  let orderType = "С собой";
+  let orderType = "takeaway";
   cart.forEach(i => {
-    if (i.name.toLowerCase().includes("доставка")) orderType = "Доставка";
+    if (i.name.toLowerCase().includes("доставка")) orderType = "delivery";
   });
 
   const payload = {
     employee_id: window.EMPLOYEE_ID,
     items: cart.map(i => ({ id: i.id, name: i.name, price: i.price, qty: i.qty })),
     note,
-    order_type: orderType
+    order_type: orderType,
+    ...manualDiscountFields()
   };
 
   const res = await fetch('/orders/submit/', {
@@ -111,6 +169,7 @@ async function checkout() {
     body: JSON.stringify(payload)
   });
 
+  if (res.status === 403) return notify('Неверный PIN администратора для скидки', "error");
   if (!res.ok) return notify('Ошибка оформления заказа', "error");
   const data = await res.json();
 
@@ -123,7 +182,7 @@ async function checkout() {
       const li = document.createElement('li');
       li.id = 'order-' + data.receipt_number;
       li.innerHTML = `
-        <strong>Заказ №${data.receipt_number}</strong> — ${fmt(payload.items.reduce((s,i)=>s+i.price*i.qty,0))} сом
+        <strong>Заказ №${data.receipt_number}</strong> — ${fmt(data.total)} сом
         <ul>${payload.items.map(i => `<li>${i.name} × ${i.qty}</li>`).join('')}</ul>
         <div><em>Тип заказа: ${orderType}</em></div>
         <button onclick="markReady(${data.receipt_number})">Готово</button>
@@ -215,4 +274,3 @@ window.addEventListener('DOMContentLoaded', () => {
   }
   updateChange();
 });
-

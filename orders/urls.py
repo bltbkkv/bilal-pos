@@ -6,8 +6,12 @@ from django.views.decorators.csrf import csrf_exempt
 
 @csrf_exempt
 def shutdown(request):
+    # Выключать сервер можно только с самого моноблока. Раньше этот адрес
+    # был открыт всем в сети: любой телефон или гость в Wi-Fi мог открыть
+    # /shutdown/ и остановить кассу.
+    if not views.is_local_request(request):
+        return JsonResponse({"error": "forbidden"}, status=403)
     os._exit(0)  # мгновенно завершает сервер
-    return JsonResponse({"ok": True})
 
 
 urlpatterns = [
@@ -16,6 +20,8 @@ urlpatterns = [
 
     # оформление заказа
     path('orders/submit/', views.submit_order, name='submit_order'),
+    path('orders/discount-preview/', views.discount_preview, name='discount_preview'),
+    path('orders/<int:order_id>/discount/', views.set_manual_discount, name='set_manual_discount'),
 
     # список заказов
     path('orders/', views.orders_list, name='orders_list'),
@@ -94,6 +100,8 @@ path('kitchen/', views.kitchen_screen, name='kitchen_screen'),
 
 path('update-dish-order/', views.update_dish_order, name='update_dish_order'),
 
+path('update-category-order/', views.update_category_order, name='update_category_order'),
+
 
 path("orders/<int:order_id>/call-english/", views.call_order_english, name="call_order_english"),
 
@@ -103,4 +111,5 @@ path("exit_kiosk", views.exit_kiosk, name="exit_kiosk"),
     path("orders/<int:order_id>/call_kz/", views.call_order_kz, name="call_order_kz"),
     # завершение работы сервера
     path("shutdown/", shutdown),
+    path("health/", views.health, name="health"),
 ]

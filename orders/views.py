@@ -9,7 +9,7 @@ from django.db.models import Q
 from collections import defaultdict
 
 
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 import pytz
 from django.utils import timezone
 from datetime import datetime
@@ -24,10 +24,54 @@ from django.db.models import Q
 import json
 from decimal import Decimal
 
-from .models import Product, Order, OrderItem, Employee
+from .models import Product, Order, OrderItem, Employee, CategoryOrder, Promotion
+from .trusted_time import get_true_now_utc, get_bishkek_now, clock_drift_warning_message
 from django.db.models import Sum, F, ExpressionWrapper, DecimalField
 from datetime import datetime
 from django.contrib.auth import login
+
+# ===== Защитные помощники (добавлено по итогам аудита) =====
+import socket as _socket
+import time as _time
+
+_LOCAL_ADDR_CACHE = {'ts': 0.0, 'addrs': {'127.0.0.1', '::1'}}
+
+def _local_addresses():
+    """Все адреса самого компьютера (чтобы отличить запрос с этого же
+    моноблока от запроса с телефона/другого устройства в сети)."""
+    now = _time.time()
+    if now - _LOCAL_ADDR_CACHE['ts'] > 60:
+        addrs = {'127.0.0.1', '::1'}
+        try:
+            for info in _socket.getaddrinfo(_socket.gethostname(), None):
+                addrs.add(info[4][0])
+        except Exception:
+            pass
+        _LOCAL_ADDR_CACHE['addrs'] = addrs
+        _LOCAL_ADDR_CACHE['ts'] = now
+    return _LOCAL_ADDR_CACHE['addrs']
+
+def is_local_request(request):
+    """True, если запрос пришёл с этого же компьютера (а не из сети)."""
+    return request.META.get('REMOTE_ADDR') in _local_addresses()
+
+_PIN_FAILS = {}            # ip -> [число_неудач, время_блокировки_до]
+_PIN_MAX_FAILS = 8         # столько ошибок подряд допускается
+_PIN_LOCK_SECONDS = 30     # потом вход блокируется на это время
+
+def _pin_blocked(ip):
+    rec = _PIN_FAILS.get(ip)
+    return bool(rec and rec[1] > _time.time())
+
+def _pin_fail(ip):
+    rec = _PIN_FAILS.setdefault(ip, [0, 0.0])
+    rec[0] += 1
+    if rec[0] >= _PIN_MAX_FAILS:
+        rec[0] = 0
+        rec[1] = _time.time() + _PIN_LOCK_SECONDS
+
+def _pin_ok(ip):
+    _PIN_FAILS.pop(ip, None)
 
 
 
@@ -36,17 +80,162 @@ def menu(request):
     emp_id = request.session.get('employee_id')
     employee = Employee.objects.filter(id=emp_id).first() if emp_id else None
 
-    # Берём только активные продукты
-    products = Product.objects.filter(is_active=True)
+    # Берём только активные продукты, сортируем по категории, затем по
+    # сохранённому order внутри категории (тот самый drag-and-drop блюд).
+    products = Product.objects.filter(is_active=True).order_by('category', 'order', 'id')
 
-    # Категории тоже формируем только из активных продуктов
-    categories = products.values_list('category', flat=True).distinct()
+    # Список категорий считаем ОТДЕЛЬНЫМ запросом без order_by по order/id —
+    # иначе distinct() может упасть на бэкендах вроде PostgreSQL, где DISTINCT
+    # требует, чтобы поля из ORDER BY входили в сам SELECT.
+    raw_categories = list(
+        Product.objects.filter(is_active=True).values_list('category', flat=True).distinct()
+    )
+
+    # Сохранённый порядок категорий (drag-and-drop категорий). Категории,
+    # для которых ещё нет записи в CategoryOrder (новые/никогда не
+    # переставлялись), уходят в конец списка, отсортированные по алфавиту.
+    category_positions = dict(CategoryOrder.objects.values_list('name', 'order'))
+    categories = sorted(
+        raw_categories,
+        key=lambda c: (category_positions.get(c, 10**9), c or '')
+    )
 
     return render(request, 'menu.html', {
         'employee': employee,
         'categories': categories,
         'products': products
     })
+
+
+# ===================== СКИДКИ =====================
+def _active_promotions(when_local):
+    """Акции, действующие в указанный момент (местное время)."""
+    day = when_local.date()
+    wd = str(when_local.weekday())
+    res = []
+    for p in Promotion.objects.filter(is_active=True).select_related('product'):
+        if p.date_from and day < p.date_from:
+            continue
+        if p.date_to and day > p.date_to:
+            continue
+        if p.weekdays and wd not in [x.strip() for x in p.weekdays.split(',')]:
+            continue
+        res.append(p)
+    return res
+
+
+def compute_discount(lines, when_local, manual_percent=Decimal('0')):
+    """lines: [(product, price, qty)]. Возвращает (скидка, пояснение).
+    На каждую позицию действует ОДНА лучшая акция (не суммируются).
+    Ручной процент считается от суммы после акций."""
+    promos = _active_promotions(when_local)
+    discount = Decimal('0')
+    names = []
+    for product, price, qty in lines:
+        line = Decimal(price) * int(qty)
+        best = None
+        for p in promos:
+            if p.product_id and p.product_id != product.id:
+                continue
+            if (not p.product_id) and p.category and (product.category or '').strip().lower() != p.category.strip().lower():
+                continue
+            if best is None or p.percent > best.percent:
+                best = p
+        if best:
+            discount += (line * best.percent / Decimal('100'))
+            if best.name not in names:
+                names.append(f"{best.name} -{best.percent.normalize():f}%")
+    subtotal = sum((Decimal(pr) * int(q) for _, pr, q in lines), Decimal('0'))
+    mp = Decimal(manual_percent or 0)
+    if mp > 0:
+        discount += (subtotal - discount) * mp / Decimal('100')
+        names.append(f"Ручная -{mp.normalize():f}%")
+    discount = min(discount.quantize(Decimal('1')), subtotal)  # в целых сомах
+    return discount, ", ".join(names)
+
+
+def _order_lines(order):
+    return [(it.product, it.price if it.price is not None else it.product.price, it.quantity)
+            for it in order.items.filter(cancelled=False, quantity__gt=0).select_related('product')]
+
+
+def apply_order_discount(order, save=False):
+    """Пересчитать скидку и итог заказа по текущим позициям."""
+    lines = _order_lines(order)
+    subtotal = sum((Decimal(p) * int(q) for _, p, q in lines), Decimal('0'))
+    when = pytz.utc.localize(order.order_time) if order.order_time.tzinfo is None else order.order_time
+    disc, note = compute_discount(lines, when.astimezone(pytz.timezone('Asia/Bishkek')), order.manual_discount_percent)
+    order.discount = disc
+    order.discount_note = note[:200]
+    order.total = subtotal - disc
+    if save:
+        order.save(update_fields=['discount', 'discount_note', 'total'])
+    return subtotal, disc
+
+
+def _admin_by_pin(pin, request=None):
+    """Проверка PIN администратора. С request — с той же защитой от перебора, что и вход."""
+    pin = (pin or '').strip()
+    if not pin:
+        return None
+    ip = request.META.get('REMOTE_ADDR', '?') if request is not None else None
+    if ip and _pin_blocked(ip):
+        return None
+    e = Employee.objects.filter(pin=pin).first()
+    if e and (e.role or '').lower() in ('админ', 'admin'):
+        if ip:
+            _pin_ok(ip)
+        return e
+    if ip:
+        _pin_fail(ip)
+    return None
+
+
+@csrf_exempt
+@require_POST
+def discount_preview(request):
+    """Показать кассиру скидку до оформления. Тело: {items:[{id,qty}], manual_percent, manual_pin}"""
+    try:
+        data = json.loads(request.body.decode('utf-8'))
+    except Exception:
+        return JsonResponse({'ok': False}, status=400)
+    lines = []
+    for i in data.get('items', []):
+        try:
+            p = Product.objects.get(id=int(i['id']))
+            lines.append((p, p.price if p.price is not None else Decimal(str(i['price'])), int(i['qty'])))
+        except Exception:
+            continue
+    mp = Decimal('0')
+    if data.get('manual_percent'):
+        if not _admin_by_pin(data.get('manual_pin'), request):
+            return JsonResponse({'ok': False, 'error': 'Неверный PIN администратора'}, status=403)
+        try:
+            mp = max(Decimal('0'), min(Decimal('100'), Decimal(str(data['manual_percent']).replace(',', '.'))))
+        except InvalidOperation:
+            mp = Decimal('0')
+    disc, note = compute_discount(lines, get_bishkek_now(), mp)
+    subtotal = sum((Decimal(p) * q for _, p, q in lines), Decimal('0'))
+    return JsonResponse({'ok': True, 'subtotal': str(subtotal), 'discount': str(disc),
+                         'total': str(subtotal - disc), 'note': note})
+
+
+@csrf_exempt
+@require_POST
+def set_manual_discount(request, order_id):
+    """Ручная скидка на уже созданный заказ. Тело: {percent, pin}. percent=0 снимает."""
+    order = get_object_or_404(Order, id=order_id)
+    try:
+        data = json.loads(request.body.decode('utf-8'))
+        pct = max(Decimal('0'), min(Decimal('100'), Decimal(str(data.get('percent', 0)).replace(',', '.'))))
+    except Exception:
+        return JsonResponse({'ok': False, 'error': 'Некорректный процент'}, status=400)
+    if pct > 0 and not _admin_by_pin(data.get('pin'), request):
+        return JsonResponse({'ok': False, 'error': 'Неверный PIN администратора'}, status=403)
+    order.manual_discount_percent = pct
+    subtotal, disc = apply_order_discount(order)
+    order.save(update_fields=['manual_discount_percent', 'discount', 'discount_note', 'total'])
+    return JsonResponse({'ok': True, 'subtotal': str(subtotal), 'discount': str(disc), 'total': str(order.total)})
 
 
 @csrf_exempt
@@ -62,26 +251,72 @@ def submit_order(request):
     if not items:
         return HttpResponseBadRequest('No items')
 
-    total = sum(Decimal(str(i['price'])) * int(i['qty']) for i in items)
+    # Проверяем и приводим цену/количество каждой позиции ДО расчёта суммы.
+    # Раньше некорректная (пустая/нечисловая) цена — например, у блюда без
+    # выставленной цены в админке — роняла сервер необработанным 500 прямо
+    # на decimal.InvalidOperation. Теперь — понятная 400-ошибка с указанием,
+    # какая именно позиция виновата.
+    parsed_items = []
+    for i in items:
+        try:
+            price = Decimal(str(i['price']))
+            qty = int(i['qty'])
+        except (InvalidOperation, KeyError, TypeError, ValueError):
+            return HttpResponseBadRequest(
+                f"Некорректная цена или количество у товара id={i.get('id', '?')}"
+            )
+        if price < 0:
+            return HttpResponseBadRequest(
+                f"У товара id={i.get('id', '?')} некорректная (отрицательная) цена"
+            )
+        if qty <= 0:
+            return HttpResponseBadRequest(
+                f"Некорректное количество у товара id={i.get('id', '?')}"
+            )
+        parsed_items.append({**i, '_price': price, '_qty': qty})
+
+    # Цена берётся из базы (клиентской цене не доверяем), если она там задана.
+    products = {}
+    for p in parsed_items:
+        product = get_object_or_404(Product, id=int(p['id']))
+        products[p['id']] = product
+        if product.price is not None:
+            p['_price'] = Decimal(product.price)
+
+    manual_pct = Decimal('0')
+    if data.get('manual_percent'):
+        if not _admin_by_pin(data.get('manual_pin'), request):
+            return JsonResponse({'ok': False, 'error': 'Неверный PIN администратора'}, status=403)
+        try:
+            manual_pct = max(Decimal('0'), min(Decimal('100'), Decimal(str(data['manual_percent']).replace(',', '.'))))
+        except InvalidOperation:
+            manual_pct = Decimal('0')
+
+    lines = [(products[p['id']], p['_price'], p['_qty']) for p in parsed_items]
+    subtotal = sum((pr * q for _, pr, q in lines), Decimal('0'))
+    discount, discount_note = compute_discount(lines, get_bishkek_now(), manual_pct)
+    total = subtotal - discount
 
     # создаём заказ через save(), чтобы сработала логика receipt_number
     order = Order(
         employee=emp,
         total=total,
+        discount=discount,
+        discount_note=discount_note[:200],
+        manual_discount_percent=manual_pct,
         note=data.get('note', ''),
         status='pending',
         order_type=data.get('order_type', 'here')
     )
     order.save()
 
-    for i in items:
-        product = get_object_or_404(Product, id=int(i['id']))
+    for p in parsed_items:
         OrderItem.objects.create(
             order=order,
-            product=product,
-            quantity=int(i['qty']),
-            price=Decimal(str(i['price'])),
-            options=i.get('options', [])
+            product=products[p['id']],
+            quantity=p['_qty'],
+            price=p['_price'],
+            options=p.get('options', [])
         )
 
     print_receipt_direct(order)
@@ -89,7 +324,7 @@ def submit_order(request):
     # возвращаем только информацию о заказе, без items
     return JsonResponse({
         'ok': True,
-        'order_number': order.receipt_number,
+        'receipt_number': order.receipt_number,
         'status': order.status,
         'total': str(order.total)
     })
@@ -175,13 +410,21 @@ def print_receipt_view(request, order_id):
 
 
 def get_employee_id(request):
-    pin = request.GET.get('pin')
-    try:
-        employee = Employee.objects.get(pin=pin)
-        request.session['employee_id'] = employee.id  # сохраняем кассира
-        return JsonResponse({'id': employee.id})
-    except Employee.DoesNotExist:
+    ip = request.META.get('REMOTE_ADDR', '?')
+    if _pin_blocked(ip):
+        return JsonResponse({'error': 'Слишком много попыток. Подождите полминуты.'}, status=429)
+
+    pin = (request.GET.get('pin') or '').strip()
+    # .filter().first() вместо .get(): если у двух сотрудников случайно одинаковый
+    # PIN, раньше был вылет 500, теперь просто входит первый.
+    employee = Employee.objects.filter(pin=pin).first() if pin else None
+    if employee is None:
+        _pin_fail(ip)
         return JsonResponse({'error': 'Неверный PIN'}, status=400)
+
+    _pin_ok(ip)
+    request.session['employee_id'] = employee.id  # сохраняем кассира
+    return JsonResponse({'id': employee.id})
 
 from datetime import datetime
 from decimal import Decimal
@@ -218,7 +461,7 @@ BISHKEK_TZ = pytz.timezone("Asia/Bishkek")
 @csrf_exempt
 def report_by_date(request):
     login_required = not request.session.get('report_access_granted')
-    now_bishkek = timezone.now().astimezone(BISHKEK_TZ)
+    now_bishkek = get_bishkek_now()
 
     def get_cashier_name(emp):
         if not emp:
@@ -398,7 +641,7 @@ def report_by_date(request):
                     "amount": None,
                     "time": di.deleted_at
                 })
-            lines.sort(key=lambda l: l["time"] or timezone.now(), reverse=True)
+            lines.sort(key=lambda l: l["time"] or get_true_now_utc(), reverse=True)
             cancellations_blocks.append({"cashier": cashier_name, "lines": lines})
 
         return render(request, 'report_by_date.html', {
@@ -419,18 +662,30 @@ def report_by_date(request):
             'end_date': end_date,
             'start_time': start_time,
             'end_time': end_time,
+            'default_start': now_bishkek.date().isoformat(),
+            'default_end': (now_bishkek + timezone.timedelta(days=1)).date().isoformat(),
+            'default_start_time': '07:00',
+            'default_end_time': '05:00',
+            'clock_drift_warning': clock_drift_warning_message(),
             'login_required': login_required,
             'cancellations_blocks': cancellations_blocks,
         })
 
     # --- GET: собираем отмены по выбранному диапазону ---
-    now_bishkek = timezone.now().astimezone(BISHKEK_TZ)
+    now_bishkek = get_bishkek_now()
 
-    # Берём параметры из формы (если не выбраны — ставим дефолт)
+    # Без пароля не отдаём вообще никаких данных (раньше список отмен и
+    # кассиров уходил на страницу даже до ввода пароля — его скрывали только
+    # визуально, но он был в коде страницы).
+    if login_required:
+        return render(request, 'report_by_date.html', {'login_required': True})
+
+    # Берём параметры из формы (если не выбраны — ставим дефолт: business-day
+    # с 07:00 сегодня до 05:00 следующего дня, посчитанный по доверенному времени)
     start_date = request.GET.get("start") or now_bishkek.date().isoformat()
     end_date = request.GET.get("end") or (now_bishkek + timezone.timedelta(days=1)).date().isoformat()
-    start_time = request.GET.get("start_time") or "09:00"
-    end_time = request.GET.get("end_time") or "02:00"
+    start_time = request.GET.get("start_time") or "07:00"
+    end_time = request.GET.get("end_time") or "05:00"
 
     try:
         start_dt = datetime.strptime(f"{start_date} {start_time}", "%Y-%m-%d %H:%M")
@@ -545,7 +800,7 @@ def report_by_date(request):
 
         # сортировка по времени
         # сортировка по времени
-        lines.sort(key=lambda l: l["time"] or timezone.now().astimezone(BISHKEK_TZ), reverse=True)
+        lines.sort(key=lambda l: l["time"] or get_bishkek_now(), reverse=True)
         cancellations_blocks.append({"cashier": cashier_name, "lines": lines})
 
 
@@ -613,6 +868,11 @@ def report_by_date(request):
         'end_date': end_date,
         'start_time': start_time,
         'end_time': end_time,
+        'default_start': now_bishkek.date().isoformat(),
+        'default_end': (now_bishkek + timezone.timedelta(days=1)).date().isoformat(),
+        'default_start_time': '07:00',
+        'default_end_time': '05:00',
+        'clock_drift_warning': clock_drift_warning_message(),
         'cancelled_items_log': cancelled_items_log,
     })
 
@@ -789,7 +1049,7 @@ def report_receipt(request):
 
 
 def reports(request):
-    start = timezone.now().replace(hour=0, minute=0, second=0, microsecond=0)
+    start = get_bishkek_now().replace(hour=0, minute=0, second=0, microsecond=0)
     summary = Order.objects.filter(order_time__gte=start).aggregate(total=Sum('total'))
     top_products = (OrderItem.objects
                     .values('product__name')
@@ -834,7 +1094,7 @@ def cancel_order(request, order_id):
     emp_id = request.session.get("employee_id")
     emp = Employee.objects.filter(id=emp_id).first()
     order.cancelled_by = emp
-    order.cancelled_at = timezone.now()  # ✅ фикс: время отмены
+    order.cancelled_at = get_true_now_utc()  # ✅ фикс: время отмены (доверенное)
 
     order.save()
     return JsonResponse({'ok': True, 'order_cancelled': True})
@@ -859,7 +1119,7 @@ def cancel_order_item(request, item_id):
     emp = Employee.objects.filter(id=emp_id).first()
 
     item.cancelled_by = emp
-    item.cancelled_at = timezone.now()   # ✅ фикс: время отмены блюда
+    item.cancelled_at = get_true_now_utc()   # ✅ фикс: время отмены блюда (доверенное)
     item.save()
 
     return JsonResponse({"ok": True, "item_cancelled": True})
@@ -897,25 +1157,46 @@ def orders_ready_list(request):
 
 
 
-# ===== Страница редактирования =====
+from django.shortcuts import render, get_object_or_404
+from django.db.models import Q
+from django.views.decorators.http import require_GET
+from .models import Order, Product, Employee  # убедитесь, что Employee импортирован
+
+from django.shortcuts import render, get_object_or_404
+from django.db.models import Q
+from django.views.decorators.http import require_GET
+from .models import Order, Product, Employee
+
 @require_GET
 def edit_order(request, order_id):
     order = get_object_or_404(Order, id=order_id)
     products = Product.objects.filter(is_active=True).order_by('category', 'name')
     categories = sorted(set(products.values_list('category', flat=True)))
 
-    # Активные блюда — только те, что не отменены и количество > 0
     active_items = order.items.filter(cancelled=False, quantity__gt=0).select_related('product')
-
     cancelled_items = order.items.filter(
         Q(cancelled=True) | Q(quantity=0, is_draft=True)
     ).select_related('product')
 
-    # ⚡ сохраняем baseline в сессии для пересчёта кухни
+    # baseline для отслеживания изменений
     request.session['baseline'] = {
         str(it.product.id): it.quantity
         for it in active_items
     }
+
+    # ---- ПОЛУЧАЕМ СОТРУДНИКА ----
+    employee = None
+    employee_id = request.session.get('employee_id')
+    if employee_id:
+        try:
+            employee = Employee.objects.get(id=employee_id)
+        except Employee.DoesNotExist:
+            pass
+
+    # ---- ВЫЧИСЛЯЕМ, ЯВЛЯЕТСЯ ЛИ ОН АДМИНОМ (на случай, если роль "admin" или "админ") ----
+    is_admin = False
+    if employee and employee.role:
+        is_admin = employee.role.lower() in ('админ', 'admin')
 
     return render(request, 'edit_order.html', {
         'order': order,
@@ -923,6 +1204,8 @@ def edit_order(request, order_id):
         'products': products,
         'cancelled_items': cancelled_items,
         'categories': categories,
+        'employee': employee,      # ← передаём сотрудника
+        'is_admin': is_admin,     # ← передаём булевый флаг
     })
 
 
@@ -1053,7 +1336,7 @@ def reduce_item_quantity(request, item_id):
         # сразу фиксируем отмену
         item.cancelled = True
         item.cancelled_by = emp
-        item.cancelled_at = timezone.now()
+        item.cancelled_at = get_true_now_utc()
 
     item.save(update_fields=[
         "quantity", "original_quantity",
@@ -1090,7 +1373,7 @@ def remove_item_from_order(request, item_id):
     item.is_draft = False
     item.cancelled = True
     item.cancelled_by = emp
-    item.cancelled_at = timezone.now()
+    item.cancelled_at = get_true_now_utc()
     item.save(update_fields=[
         "quantity", "is_new", "is_draft",
         "original_quantity", "cancelled", "cancelled_by", "cancelled_at"
@@ -1254,8 +1537,8 @@ def order_cancel(request, order_id):
     emp_id = request.session.get("employee_id")
     emp = Employee.objects.filter(id=emp_id).first()
 
-    # фиксируем единое время отмены
-    cancelled_time = timezone.now()
+    # фиксируем единое время отмены (доверенное, а не системные часы)
+    cancelled_time = get_true_now_utc()
 
     # берём все позиции заказа
     cancelled_items = order.items.all()
@@ -1381,16 +1664,8 @@ def order_receipt_reprint(request, order_id):
 
         return y
 
-    # печать полного актуального заказа
-    print_to_printer(
-        "XP-123",
-        order.receipt_number,
-        order_dt_local,
-        items,
-        kitchen=True,
-        order_type="",
-        operator_name=operator_name,  # передаём функцию в печать
-    )
+    # Перепечать — это предчек, печатается ТОЛЬКО на кассовом принтере,
+    # кухню трогать не нужно (так задумано).
     print_to_printer(
         "XP-80",
         order.receipt_number,
@@ -1399,6 +1674,8 @@ def order_receipt_reprint(request, order_id):
         kitchen=False,
         order_type="",
         operator_name=operator_name,  # передаём функцию в печать
+        discount=order.discount,
+        discount_note=order.discount_note,
     )
 
     return JsonResponse({"ok": True})
@@ -1584,6 +1861,13 @@ def print_receipt_direct(order):
 
         # Итог
         draw_center(pdc, y, FULL_LINE, size=28); y += line_h
+        _disc = Decimal(getattr(order, "discount", 0) or 0)
+        if _disc > 0:
+            draw_text(pdc, x_name, y, f"Сумма: {int(total_sum)} сом", size=28); y += line_h
+            draw_text(pdc, x_name, y, f"Скидка -{int(_disc)} сом", size=36); y += line_h
+            if getattr(order, "discount_note", ""):
+                draw_text(pdc, x_name, y, str(order.discount_note)[:40], size=24); y += line_h
+            total_sum = total_sum - _disc
         draw_text(pdc, x_name, y, "ИТОГО:", font=font_grand_total)
         draw_right(pdc, y, f"{int(total_sum)} сом", RIGHT_EDGE, font=font_grand_total); y += 80
         draw_center(pdc, y, f"{order_type}", size=48); y += 60
@@ -1911,6 +2195,28 @@ from datetime import datetime
 
 @require_GET
 def reprint_receipt_view(request, order_id):
+    """
+    Повторная печать чека по кнопке «Переpечать».
+
+    Раньше здесь печатался только клиентский чек на одном принтере
+    (XP-80) — кухня при повторной печати ничего не получала. Теперь
+    используем ту же print_receipt_direct(), что и при обычной печати
+    заказа — она уже печатает на всех трёх принтерах (клиентский XP-80
+    + оба кухонных XP-80C (copy 1) и XP-80D).
+    """
+    order = get_object_or_404(Order, id=order_id)
+    try:
+        print_receipt_direct(order)
+        return JsonResponse({'ok': True, 'reprinted': True})
+    except Exception as e:
+        import traceback
+        return JsonResponse({
+            'error': f'Ошибка повторной печати: {e}',
+            'trace': traceback.format_exc()
+        }, status=500)
+
+
+def _unused_old_reprint_receipt_view_body(request, order_id):
     order = get_object_or_404(Order, id=order_id)
 
     try:
@@ -2038,6 +2344,13 @@ def reprint_receipt_view(request, order_id):
             y = draw_row(pdc, y, item.product.name, qty, price, line_total)
 
         draw_center(pdc, y, FULL_LINE, size=28); y += line_h
+        _disc = Decimal(getattr(order, "discount", 0) or 0)
+        if _disc > 0:
+            draw_text(pdc, x_name, y, f"Сумма: {int(total_sum)} сом", size=28); y += line_h
+            draw_text(pdc, x_name, y, f"Скидка -{int(_disc)} сом", size=36); y += line_h
+            if getattr(order, "discount_note", ""):
+                draw_text(pdc, x_name, y, str(order.discount_note)[:40], size=24); y += line_h
+            total_sum = total_sum - _disc
         draw_text(pdc, x_name, y, "ИТОГО:", font=font_grand_total)
         draw_right(pdc, y, f"{int(total_sum)} сом", RIGHT_EDGE, font=font_grand_total); y += 80
         draw_center(pdc, y, FULL_LINE, size=28); y += line_h
@@ -2225,6 +2538,8 @@ def print_to_printer(
     recalc=False,
     previous_quantities=None,
     edit_ops=None,
+    discount=0,
+    discount_note="",
 ):
     import win32ui
     import win32print
@@ -2478,6 +2793,13 @@ def print_to_printer(
             y = draw_row(pdc, y, name, qty, price, line_total)
 
         draw_center(pdc, y, FULL_LINE, size=28); y += line_h
+        _disc = Decimal(discount or 0)
+        if _disc > 0 and not recalc:
+            draw_text(pdc, x_name, y, f"Сумма: {int(total_sum)} сом", size=28); y += line_h
+            draw_text(pdc, x_name, y, f"Скидка -{int(_disc)} сом", size=36); y += line_h
+            if discount_note:
+                draw_text(pdc, x_name, y, str(discount_note)[:40], size=24); y += line_h
+            total_sum = total_sum - _disc
         draw_text(pdc, x_name, y, "ИТОГО:", size=72)
         draw_right(pdc, y, f"{int(total_sum)} сом", RIGHT_EDGE, size=72); y += 80
 
@@ -2519,10 +2841,8 @@ def _serialize_items(order):
     } for it in items]
 
 def _recalc_and_serialize(order):
-    total = sum((it.price * it.quantity) for it in order.items.filter(cancelled=False))
-    order.total = total
-    order.save(update_fields=["total"])
-    return _serialize_items(order), float(total)
+    apply_order_discount(order, save=True)   # итог = сумма − скидка
+    return _serialize_items(order), float(order.total)
 
 
 
@@ -2580,7 +2900,7 @@ def print_cancelled_receipt(request):
     from collections import defaultdict
     from datetime import datetime, time
 
-    now = timezone.localtime(timezone.now())  # локальное время
+    now = get_bishkek_now()  # доверенное время (не системные часы моноблока)
 
     # Принимаем JSON или form-data
     if request.content_type == "application/json":
@@ -2604,13 +2924,13 @@ def print_cancelled_receipt(request):
         except Exception:
             # fallback на дефолтный диапазон
             today = now.date()
-            start_dt = timezone.make_aware(datetime.combine(today, time(9, 0)))
-            end_dt   = timezone.make_aware(datetime.combine(today, time(2, 0))) + timezone.timedelta(days=1)
+            start_dt = timezone.make_aware(datetime.combine(today, time(7, 0)))
+            end_dt   = timezone.make_aware(datetime.combine(today, time(5, 0))) + timezone.timedelta(days=1)
     else:
-        # дефолтный диапазон: 9:00 до 2:00 следующего дня
+        # дефолтный диапазон: 7:00 до 5:00 следующего дня
         today = now.date()
-        start_dt = timezone.make_aware(datetime.combine(today, time(9, 0)))
-        end_dt   = timezone.make_aware(datetime.combine(today, time(2, 0))) + timezone.timedelta(days=1)
+        start_dt = timezone.make_aware(datetime.combine(today, time(7, 0)))
+        end_dt   = timezone.make_aware(datetime.combine(today, time(5, 0))) + timezone.timedelta(days=1)
 
     # Выборка отмен
     cancelled_orders = Order.objects.filter(
@@ -2725,7 +3045,7 @@ def mark_delivery(request, order_id):
 # views.py
 
 def kitchen_screen(request):
-    today = timezone.localtime().replace(hour=0, minute=0, second=0, microsecond=0)
+    today = get_bishkek_now().replace(hour=0, minute=0, second=0, microsecond=0)
 
     cooking_orders = Order.objects.filter(
         status='pending',
@@ -2747,14 +3067,38 @@ def kitchen_screen(request):
 
 
 @csrf_exempt
+@require_POST
 def update_dish_order(request):
-    if request.method == 'POST':
+    try:
         data = json.loads(request.body)
-        category = data.get('category')
-        order = data.get('order', [])
-        for index, dish_id in enumerate(order):
-            Product.objects.filter(id=dish_id, category=category).update(order=index)
-        return JsonResponse({'status': 'ok'})
+    except (json.JSONDecodeError, TypeError):
+        return JsonResponse({'status': 'error', 'error': 'Invalid JSON'}, status=400)
+
+    category = data.get('category')
+    order = data.get('order', [])
+    if not category or not order:
+        return JsonResponse({'status': 'error', 'error': 'category и order обязательны'}, status=400)
+
+    for index, dish_id in enumerate(order):
+        Product.objects.filter(id=dish_id, category=category).update(order=index)
+    return JsonResponse({'status': 'ok'})
+
+
+@csrf_exempt
+@require_POST
+def update_category_order(request):
+    try:
+        data = json.loads(request.body)
+    except (json.JSONDecodeError, TypeError):
+        return JsonResponse({'status': 'error', 'error': 'Invalid JSON'}, status=400)
+
+    order = data.get('order', [])
+    if not order:
+        return JsonResponse({'status': 'error', 'error': 'order обязателен'}, status=400)
+
+    for index, name in enumerate(order):
+        CategoryOrder.objects.update_or_create(name=name, defaults={'order': index})
+    return JsonResponse({'status': 'ok'})
 
 from django.db.models import Sum
 from django.shortcuts import render
@@ -2770,8 +3114,8 @@ def cancelled_report(request):
         start = timezone.datetime.fromisoformat(start)
         end = timezone.datetime.fromisoformat(end)
     else:
-        # по умолчанию — сегодня
-        today = timezone.localtime(timezone.now()).date()
+        # по умолчанию — сегодня (доверенное бишкекское время)
+        today = get_bishkek_now().date()
         start = timezone.make_aware(timezone.datetime.combine(today, timezone.datetime.min.time()))
         end = timezone.make_aware(timezone.datetime.combine(today, timezone.datetime.max.time()))
 
@@ -2816,46 +3160,57 @@ def cancelled_report(request):
 from django.http import JsonResponse
 from django.shortcuts import get_object_or_404
 from django.views.decorators.http import require_POST
-import threading
+from django.core.cache import cache as call_debounce_cache
 
-from .sound import announce
+from .sound import announce, announce_en
 from .models import Order
 
+
+# Минимальный интервал между повторными вызовами ОДНОГО И ТОГО ЖЕ заказа.
+# Защищает от гонки, если кассир кликает очень быстро или заказ открыт
+# в двух вкладках/на двух устройствах одновременно.
+CALL_DEBOUNCE_SECONDS = 2
 
 
 def order_call(request, order_id):
     order = get_object_or_404(Order, id=order_id)
+
+    lock_key = f"order_call_lock:{order_id}"
+    # cache.add() атомарно ставит ключ, только если его ещё нет —
+    # это и есть защита от параллельных вызовов одного заказа.
+    if not call_debounce_cache.add(lock_key, True, timeout=CALL_DEBOUNCE_SECONDS):
+        num = order.receipt_number or order.id
+        return JsonResponse({"ok": True, "order": num, "skipped": True})
+
     try:
         order.status = 'called'
-        order.save()
+        order.save(update_fields=['status'])
 
         num = order.receipt_number or order.id
-        threading.Thread(target=announce, args=(num,)).start()
+        # announce() теперь только кладёт фразу в очередь и сразу возвращается —
+        # реальное воспроизведение делает один выделенный поток в sound.py,
+        # поэтому параллельные запросы больше не бьются за аудио-устройство.
+        announce(num)
 
         return JsonResponse({"ok": True, "order": num})
     except Exception as e:
         return JsonResponse({"ok": False, "error": str(e)}, status=500)
 
 
-# orders/views.py
-import threading
-from django.http import JsonResponse
-from django.shortcuts import get_object_or_404
-from .models import Order
-from .sound import announce_en  # твоя функция английской озвучки
-
 def call_order_english(request, order_id):
     order = get_object_or_404(Order, id=order_id)
-    try:
-        # меняем статус заказа
-        order.status = 'called'
-        order.save()
 
-        # берём номер для озвучки
+    lock_key = f"order_call_en_lock:{order_id}"
+    if not call_debounce_cache.add(lock_key, True, timeout=CALL_DEBOUNCE_SECONDS):
         num = order.receipt_number or order.id
+        return JsonResponse({"ok": True, "order": num, "skipped": True})
 
-        # запускаем озвучку в отдельном потоке
-        threading.Thread(target=announce_en, args=(num,)).start()
+    try:
+        order.status = 'called'
+        order.save(update_fields=['status'])
+
+        num = order.receipt_number or order.id
+        announce_en(num)
 
         return JsonResponse({"ok": True, "order": num})
     except Exception as e:
@@ -2871,6 +3226,9 @@ import subprocess
 from django.http import JsonResponse
 
 def exit_kiosk(request):
+    # Закрывать браузер можно только с самого моноблока, не из сети.
+    if not is_local_request(request):
+        return JsonResponse({'error': 'forbidden'}, status=403)
     try:
         subprocess.run(["taskkill", "/IM", "chrome.exe", "/F"], check=True)
         return JsonResponse({"status": "ok"})
@@ -2901,3 +3259,39 @@ def call_order_kz(request, order_id):
         return response
 
 
+# ===== Проверка состояния системы (для удалённой диагностики) =====
+APP_VERSION = "2026.11.06"   # менять при каждой выкладке обновления
+REQUIRED_PRINTERS = ["XP-80", "XP-80C (copy 1)", "XP-80D"]
+
+def health(request):
+    """Открывать на самом моноблоке: http://localhost:8000/health/
+    Показывает версию, базу, время и видны ли все три принтера по именам."""
+    if not is_local_request(request):
+        return JsonResponse({'error': 'forbidden'}, status=403)
+
+    info = {'version': APP_VERSION}
+
+    try:
+        info['orders_in_db'] = Order.objects.count()
+        info['db'] = 'ok'
+    except Exception as e:
+        info['db'] = f'ошибка: {e}'
+
+    try:
+        from .trusted_time import is_time_trusted, clock_drift_seconds
+        info['time_synced'] = bool(is_time_trusted())
+        info['clock_drift_seconds'] = clock_drift_seconds()
+    except Exception as e:
+        info['time_synced'] = f'ошибка: {e}'
+
+    try:
+        import win32print
+        found = [p[2] for p in win32print.EnumPrinters(
+            win32print.PRINTER_ENUM_LOCAL | win32print.PRINTER_ENUM_CONNECTIONS)]
+        info['printers_found'] = found
+        info['printers_missing'] = [n for n in REQUIRED_PRINTERS if n not in found]
+    except Exception as e:
+        info['printers_found'] = f'не удалось получить список: {e}'
+
+    info['ok'] = (info.get('db') == 'ok' and not info.get('printers_missing'))
+    return JsonResponse(info, json_dumps_params={'ensure_ascii': False})

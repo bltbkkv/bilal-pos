@@ -1,16 +1,28 @@
-import torch
-import sounddevice as sd
+import os
 import threading
+import queue
+import hashlib
+
 import numpy as np
+import sounddevice as sd
+from django.conf import settings
+# torch импортируется ЛЕНИВО, внутри _load_models() — см. ниже.
+# Сам импорт torch + распаковка NeMo/kani-tts моделей стоит заметного
+# времени, и если весь нужный звук уже лежит в дисковом кэше, эта цена
+# вообще не должна платиться при каждом запуске программы.
 
-# Загружаем русскую модель
-model_ru = torch.package.PackageImporter("models/v3_1_ru.pt").load_pickle("tts_models", "model")
+# ВАЖНО: sound.py лежит внутри приложения orders/, а папка models/ —
+# в корне проекта (рядом с manage.py). Поэтому путь считаем от
+# settings.BASE_DIR, а не от os.path.dirname(__file__) — иначе получится
+# несуществующий orders/models/... (как было в прошлой версии).
+MODELS_DIR = os.path.join(str(settings.BASE_DIR), "models")
 
-# Загружаем англоязычную модель
-model_en = torch.package.PackageImporter("models/v3_en.pt").load_pickle("tts_models", "model")
-
-# Кэш для аудио
-cache = {}
+# Кэш готового аудио на диске: один раз посчитали фразу — при следующих
+# запусках просто читаем .npy файл, а не гоняем её через модель заново.
+# Это и есть главная причина долгого старта: preload_cache() раньше
+# синтезировал одни и те же 82 фразы через нейросеть при КАЖДОМ запуске.
+DISK_CACHE_DIR = os.path.join(str(settings.BASE_DIR), "tts_cache")
+os.makedirs(DISK_CACHE_DIR, exist_ok=True)
 
 NUM_WORDS = {
     0: "ноль", 1: "один", 2: "два", 3: "три", 4: "четыре",
@@ -44,51 +56,203 @@ NUM_WORDS_EN = {
     40: "forty"
 }
 
+
 def num_to_text(num: int) -> str:
     return NUM_WORDS.get(num, str(num))
+
 
 def num_to_text_en(num: int) -> str:
     return NUM_WORDS_EN.get(num, str(num))
 
-# 🔹 Прогрев моделей и драйвера звука
-def warmup():
-    # Прогрев русской модели
-    audio_ru = model_ru.apply_tts(text="тест", sample_rate=24000)
-    sd.play(audio_ru.numpy(), samplerate=24000)
-    sd.wait()
 
-    # Прогрев английской модели
-    audio_en = model_en.apply_tts(text="test", speaker="en_0", sample_rate=24000)
-    sd.play(audio_en.numpy(), samplerate=24000)
-    sd.wait()
+# ---------------------------------------------------------------------------
+# Состояние моделей / кэша.
+# Модели грузятся в фоновом потоке (см. _warmup_and_preload), чтобы импорт
+# этого модуля (а значит и старт Django) не занимал ~2 минуты.
+# ---------------------------------------------------------------------------
+model_ru = None
+model_en = None
+_models_loaded = False
+_model_lock = threading.Lock()      # torch-инференс не гарантированно потокобезопасен
+_ready_event = threading.Event()    # выставляется, когда стартовый набор фраз готов к озвучке
 
-    # Прогрев sounddevice (пустой звук)
-    sd.play(np.zeros(24000), samplerate=24000)
-    sd.wait()
+cache = {}
+_cache_lock = threading.Lock()
 
-# 🔹 Кэшируем все стандартные фразы заранее
-def preload_cache():
-    for num in range(0, 41):
-        text_ru = f"Заказ {NUM_WORDS[num]}. Пройдите на кассу!"
-        audio_ru = model_ru.apply_tts(text=text_ru, sample_rate=24000)
-        cache[text_ru] = audio_ru.numpy()
+# Очередь фраз на озвучку. Единственный поток ниже (_player_worker)
+# читает из неё и реально трогает аудио-устройство — это гарантирует,
+# что sd.play()/sd.wait() НИКОГДА не вызываются параллельно из разных
+# потоков. Именно параллельный доступ к аудио-устройству и/или к модели
+# ронял программу при быстрых повторных нажатиях кнопки вызова.
+_play_queue = queue.Queue()
+_MAX_QUEUE_SIZE = 3  # не даём очереди раздуваться, если кнопку долбят
 
-        text_en = f"Order {NUM_WORDS_EN[num]}, please proceed to the cashier"
-        audio_en = model_en.apply_tts(text=text_en, speaker="en_0", sample_rate=24000)
-        cache[text_en] = audio_en.numpy()
+
+def _load_models():
+    """Импортирует torch и распаковывает модели. Тяжёлая операция —
+    вызывается только когда реально нужен синтез новой, ещё не
+    закэшированной фразы (на диске её тоже нет)."""
+    global model_ru, model_en, _models_loaded
+    if _models_loaded:
+        return
+    with _model_lock:
+        if _models_loaded:  # повторная проверка внутри лока
+            return
+        import torch  # ленивый импорт — не платим цену torch, если не нужно
+        model_ru = torch.package.PackageImporter(
+            os.path.join(MODELS_DIR, "v3_1_ru.pt")
+        ).load_pickle("tts_models", "model")
+        model_en = torch.package.PackageImporter(
+            os.path.join(MODELS_DIR, "v3_en.pt")
+        ).load_pickle("tts_models", "model")
+        _models_loaded = True
+
+
+def _disk_cache_path(text: str) -> str:
+    # md5 от текста — стабильное имя файла независимо от кириллицы/длины
+    h = hashlib.md5(text.encode("utf-8")).hexdigest()
+    return os.path.join(DISK_CACHE_DIR, f"{h}.npy")
+
+
+def _load_from_disk(text: str):
+    path = _disk_cache_path(text)
+    if os.path.exists(path):
+        try:
+            return np.load(path)
+        except Exception as e:
+            print(f"[sound] Повреждённый файл кэша {path}: {e}")
+    return None
+
+
+def _save_to_disk(text: str, audio: np.ndarray):
+    try:
+        np.save(_disk_cache_path(text), audio)
+    except Exception as e:
+        print(f"[sound] Не удалось сохранить кэш на диск: {e}")
+
+
+def _synth(text: str, lang: str) -> np.ndarray:
+    _load_models()  # грузит модели только если ещё не загружены
+    with _model_lock:
+        if lang == "en":
+            audio = model_en.apply_tts(text=text, speaker="en_0", sample_rate=24000)
+        else:
+            audio = model_ru.apply_tts(text=text, sample_rate=24000)
+    return audio.numpy()
+
+
+def _get_or_synth(text: str, lang: str) -> np.ndarray:
+    # 1) память
+    with _cache_lock:
+        audio = cache.get(text)
+    if audio is not None:
+        return audio
+
+    # 2) диск — самый частый случай при обычном запуске: фраза уже
+    #    считалась в один из прошлых разов, модель вообще не нужна
+    audio = _load_from_disk(text)
+    if audio is not None:
+        with _cache_lock:
+            cache[text] = audio
+        return audio
+
+    # 3) синтез через модель — только для действительно новой фразы
+    audio = _synth(text, lang)
+    with _cache_lock:
+        cache[text] = audio
+    _save_to_disk(text, audio)
+    return audio
+
+
+def _player_worker():
+    """Единственный поток, которому разрешено вызывать sd.play()/sd.wait()."""
+    while True:
+        text, lang = _play_queue.get()
+        # Если запрос прилетел раньше, чем модели прогрелись — ждём.
+        _ready_event.wait()
+        try:
+            audio = _get_or_synth(text, lang)
+            sd.play(audio, samplerate=24000)
+            sd.wait()
+        except Exception as e:
+            print(f"[sound] Ошибка воспроизведения '{text}': {e}")
+        finally:
+            _play_queue.task_done()
+
+
+def _enqueue(text: str, lang: str):
+    # Если кассир кликнул много раз подряд и очередь уже полна —
+    # оставляем только самые свежие вызовы, старые не актуальны.
+    if _play_queue.qsize() >= _MAX_QUEUE_SIZE:
+        try:
+            while True:
+                _play_queue.get_nowait()
+                _play_queue.task_done()
+        except queue.Empty:
+            pass
+    _play_queue.put((text, lang))
+
 
 def announce(num: int):
-    def _play():
-        text = f"Заказ {num_to_text(num)}. Пройдите на кассу!"
-        sd.play(cache[text], samplerate=24000)
-    threading.Thread(target=_play, daemon=True).start()
+    """Кладёт фразу озвучки заказа (RU) в очередь. Не блокирует вызывающего."""
+    text = f"Заказ {num_to_text(num)}. Пройдите на кассу!"
+    _enqueue(text, "ru")
+
 
 def announce_en(num: int):
-    def _play():
-        text = f"Order {num_to_text_en(num)}, please proceed to the cashier"
-        sd.play(cache[text], samplerate=24000)
-    threading.Thread(target=_play, daemon=True).start()
+    """Кладёт фразу озвучки заказа (EN) в очередь. Не блокирует вызывающего."""
+    text = f"Order {num_to_text_en(num)}, please proceed to the cashier"
+    _enqueue(text, "en")
 
-# 🔹 Запускаем прогрев и предзагрузку при старте
-warmup()
-preload_cache()
+
+def _warmup_and_preload():
+    try:
+        # Прогрев аудио-драйвера — это не torch, нужно всегда и быстро.
+        sd.play(np.zeros(2400), samplerate=24000)
+        sd.wait()
+
+        # Пытаемся поднять весь стандартный набор фраз из ДИСКОВОГО кэша.
+        # Если он уже есть (второй и последующие запуски) — torch вообще
+        # не импортируется и не грузится, старт занимает секунды.
+        missing = []
+        for n in range(0, 41):
+            text_ru = f"Заказ {NUM_WORDS[n]}. Пройдите на кассу!"
+            text_en = f"Order {NUM_WORDS_EN[n]}, please proceed to the cashier"
+
+            audio_ru = _load_from_disk(text_ru)
+            audio_en = _load_from_disk(text_en)
+
+            if audio_ru is not None:
+                with _cache_lock:
+                    cache[text_ru] = audio_ru
+            else:
+                missing.append((text_ru, "ru"))
+
+            if audio_en is not None:
+                with _cache_lock:
+                    cache[text_en] = audio_en
+            else:
+                missing.append((text_en, "en"))
+
+        if missing:
+            # Что-то ещё не считалось (самый первый запуск, либо кэш
+            # почистили) — вот тут действительно грузим модели и считаем.
+            print(f"[sound] В кэше не хватает {len(missing)} фраз, синтезирую через модель...")
+            for text, lang in missing:
+                _get_or_synth(text, lang)
+
+        print("[sound] Кэш озвучки готов")
+    except Exception as e:
+        print(f"[sound] Ошибка прогрева/предзагрузки: {e}")
+    finally:
+        # Даже если что-то пошло не так — снимаем блокировку очереди,
+        # чтобы сервер не завис намертво. Ошибки будут видны в логе.
+        _ready_event.set()
+
+
+# Поток-плеер живёт всё время работы процесса.
+threading.Thread(target=_player_worker, daemon=True, name="tts-player").start()
+
+# Прогрев и предзагрузка кэша — в фоне. Django стартует сразу,
+# не дожидаясь ~2 минут загрузки torch/NeMo моделей.
+threading.Thread(target=_warmup_and_preload, daemon=True, name="tts-warmup").start()

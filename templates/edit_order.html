@@ -18,6 +18,7 @@
     .btn-danger { background: #dc3545; color: white; }
     .btn-primary { background: #007bff; color: white; }
     .btn-small { padding: 8px 12px; font-size: 16px; }
+    .btn:disabled { opacity: 0.6; cursor: not-allowed; }
     .total { font-weight: bold; font-size: 22px; margin-top: 12px; }
     .tabs { display: flex; gap: 12px; margin-bottom: 12px; flex-wrap: wrap; }
     .tab-btn { background: #eee; border: none; padding: 16px 24px; border-radius: 10px; cursor: pointer; font-size: 18px; }
@@ -145,11 +146,9 @@
 <div class="actions" style="margin-top: 20px; display: flex; gap: 30px; flex-wrap: wrap;">
 
   <button class="btn btn-primary" onclick="reprintReceipt({{ order.id }})">🖨️ Чек</button>
-  <button class="btn btn-primary" onclick="callOrder({{ order.id }})">📢 Вызов</button>
-  <button class="btn btn-primary" onclick="callOrderKZ({{ order.id }})">📢 Вызов (Кыргызча)</button>
-  <button class="btn btn-primary" onclick="callOrderEnglish({{ order.id }})">English Call</button>
+  <button id="btn-call" class="btn btn-primary" onclick="callOrder({{ order.id }})">📢 Вызов</button>
+  <button id="btn-call-en" class="btn btn-primary" onclick="callOrderEnglish({{ order.id }})">English Call</button>
   <button class="btn btn-secondary" onclick="goBack()">⬅️ Назад</button>
-  <audio id="order-audio-kz" hidden></audio>
 </div>
 
 
@@ -160,21 +159,25 @@
       <h3>Заказ №{{ order.receipt_number }}</h3>
       <div id="order-items">
         {% for it in items %}
-          <div class="item-row">
+          <div class="item-row" data-item-id="{{ it.id }}">
             <div>{{ it.product.name }} × {{ it.quantity }} — {{ it.line_total }} сом</div>
             <div style="display:flex; gap:8px;">
               <button class="btn btn-small btn-primary" onclick="decreaseItemQuantity({{ it.id }}, {{ it.quantity }})">−</button>
-              <button onclick="removeItem({{ it.id }})">Удалить</button>
-
-
+              <button class="btn btn-small btn-danger" onclick="removeItem({{ it.id }})">Удалить</button>
             </div>
           </div>
         {% endfor %}
       </div>
+      {% if order.discount %}<div style="color:#2e7d32; font-weight:600;">Скидка: −{{ order.discount|stringformat:'.0f' }} сом{% if order.discount_note %} ({{ order.discount_note }}){% endif %}</div>{% endif %}
       <div class="total">Итого: <span id="order-total">{{ order.total }} сом</span></div>
-
-      <!-- Назад (без сохранения изменений) -->
-
+      <details style="margin-top:10px;">
+        <summary style="cursor:pointer;">Скидка вручную (админ)</summary>
+        <div style="display:flex; gap:8px; margin-top:8px; flex-wrap:wrap;">
+          <input id="md-percent" type="number" min="0" max="100" placeholder="% (0 = снять)" value="{{ order.manual_discount_percent|stringformat:'.0f' }}">
+          <input id="md-pin" type="password" inputmode="numeric" placeholder="PIN админа">
+          <button class="btn btn-primary" onclick="applyManualDiscount({{ order.id }})">Применить</button>
+        </div>
+      </details>
 
 <!-- Пересчитать -->
 <div style="margin-top:20px; display:flex; justify-content:flex-start;">
@@ -183,13 +186,10 @@
 
 <!-- Под Пересчитать располагаем Отменить и Готово -->
 <div style="margin-top:50px; display:flex; justify-content:flex-start; gap:80px; flex-wrap:wrap;">
-  <button class="btn btn-green btn-large" onclick="openPaymentModal({{ order.id }}, {{ order.total }})">✅ Готово</button>
+  <button class="btn btn-green btn-large" onclick="openPaymentModal({{ order.id }}, {{ order.total|default:0|stringformat:'.2f' }})">✅ Готово</button>
   <button class="btn btn-danger" onclick="cancelOrder({{ order.id }})">Удалить заказ</button>
   <button class="btn btn-warning btn-large" onclick="markDelivery({{ order.id }})">🚚 Доставка</button>
 </div>
-
-
-
 
     </div>
 
@@ -220,19 +220,47 @@
 
   <div id="notify" class="notify"></div>
 
+  <div id="payment-modal" class="modal" style="display:none;">
+    <div class="modal-content">
+      <h2>Оплата заказа</h2>
+      <p>Итого: <span id="payment-total">0</span> сом</p>
+
+      <input id="payment-display" type="text" readonly placeholder="Введите сумму" />
+      <p>Сдача: <span id="payment-change">0</span> сом</p>
+
+      <div class="keyboard">
+        <button onclick="pressPayKey('1')">1</button>
+        <button onclick="pressPayKey('2')">2</button>
+        <button onclick="pressPayKey('3')">3</button>
+        <button onclick="pressPayKey('4')">4</button>
+        <button onclick="pressPayKey('5')">5</button>
+        <button onclick="pressPayKey('6')">6</button>
+        <button onclick="pressPayKey('7')">7</button>
+        <button onclick="pressPayKey('8')">8</button>
+        <button onclick="pressPayKey('9')">9</button>
+        <button onclick="pressPayKey('0')">0</button>
+        <button onclick="clearPayInput()">C</button>
+        <button onclick="backspacePay()">←</button>
+      </div>
+
+      <div class="actions" style="margin-top:20px; display:flex; gap:16px;">
+        <button id="btn-paid" onclick="confirmPayment()">✅ Оплачено</button>
+        <button id="btn-cancel-payment" onclick="closePaymentModal()">❌ Отменить</button>
+      </div>
+    </div>
+  </div>
+
   <script>
-  // Базовые количества позиций на момент открытия страницы
-  // Генерируем из контекста заказа
-  window.baselineItems = {
-    {% for it in order.items.all %}
-      "{{ it.id }}": {{ it.quantity }}{% if not forloop.last %},{% endif %}
-    {% endfor %}
-  };
-</script>
+    // Базовые количества позиций на момент открытия страницы
+    window.baselineItems = {
+      {% for it in order.items.all %}
+        "{{ it.id }}": {{ it.quantity }}{% if not forloop.last %},{% endif %}
+      {% endfor %}
+    };
+  </script>
 
-
-<script>
-    // CSRF токен из cookie
+  <script>
+    // ====== CSRF ======
     function getCookie(name) {
       let cookieValue = null;
       if (document.cookie && document.cookie !== '') {
@@ -249,10 +277,12 @@
     }
     const csrftoken = getCookie('csrftoken');
 
-    // Назад — просто переход без сохранения
-    async function goBack() {
-      window.location.href = "/orders/";
-    }
+    // ====== Состояние редактирования ======
+    let baseline = window.baselineItems || {};
+    let hasChanges = false;
+    let editOps = {};
+
+    function flagChanged() { hasChanges = true; }
 
     function showTab(cat) {
       document.querySelectorAll('.tab-content').forEach(el => el.style.display = 'none');
@@ -265,155 +295,13 @@
       if (firstTab) firstTab.style.display = 'block';
     });
 
-async function addItem(orderId, productId) {
-  flagChanged();
-
-  // читаем текущее количество из DOM
-  const currentItems = readCurrentItemsFromDOM();
-  const curQty = (currentItems[productId] || 0) + 1;
-
-  if (!editOps[productId]) {
-    editOps[productId] = { added: 0, removed: 0 };
-  }
-
-  if (!baseline.hasOwnProperty(productId)) {
-    // 🔹 новое блюдо → печатаем всё количество
-    editOps[productId].added = curQty;
-  } else {
-    // 🔹 старое блюдо → печатаем только прирост
-    editOps[productId].added += 1;
-  }
-
-  console.log("DEBUG editOps:", JSON.stringify(editOps));
-
-  const resp = await fetch(`/orders/${orderId}/add-item/`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'X-CSRFToken': csrftoken
-    },
-    body: JSON.stringify({ product_id: productId, qty: 1 })
-  });
-
-  const data = await resp.json();
-  if (!data.ok) {
-    alert(data.error || 'Ошибка добавления');
-    return;
-  }
-
-  redrawItems(data.items, data.total);
-
-  // ⚠️ baseline обновлять сразу не нужно — он должен обновляться только после пересчёта (recalc)
-}
-
-    function reduceItem(itemId, newQty, orderId) {
-      fetch(`/orders/${itemId}/reduce_item_quantity/`, {
-        method: "POST",
-        headers: { "X-CSRFToken": csrftoken },
-        body: new URLSearchParams({ quantity: newQty })
-      })
-      .then(res => res.json())
-      .then(data => {
-        if (data.ok) {
-          recalcOrderTotal(orderId);
-        }
-      });
+    function notify(msg, type = "success") {
+      const box = document.getElementById('notify');
+      if (!box) return;
+      box.textContent = msg;
+      box.className = "notify " + (type === "error" ? "error show" : "show");
+      setTimeout(() => { box.className = "notify"; }, 2000);
     }
-
-function removeItem(itemId) {
-  fetch(`/order-items/${itemId}/remove/`, {
-    method: "POST",
-    headers: { "X-CSRFToken": csrftoken }
-  })
-  .then(res => res.json())
-  .then(data => {
-    if (data.ok) {
-      redrawItems(data.items, data.total);
-    }
-  });
-}
-
-
-
-
-
-    function recalcOrderTotal(orderId) {
-      fetch(`/orders/${orderId}/recalc_order_total/`, {
-        method: "POST",
-        headers: { "X-CSRFToken": csrftoken }
-      })
-      .then(res => res.json())
-      .then(data => {
-        if (data.ok) {
-          // ✅ заменено на redrawItems
-          redrawItems(data.items, data.total);
-        }
-      });
-    }
-
-    async function decreaseItemQuantity(itemId, currentQty) {
-      const newQty = currentQty - 1;
-      const resp = await fetch(`/order-items/${itemId}/reduce/`, {
-        method: 'POST',
-        headers: {
-          'Content-Type':'application/x-www-form-urlencoded',
-          'X-CSRFToken': csrftoken
-        },
-        body: `quantity=${newQty}`
-      });
-      const data = await resp.json();
-      if (!data.ok) { alert(data.error || 'Ошибка уменьшения'); return; }
-      redrawItems(data.items, data.total);
-    }
-
-async function recalc(orderId) {
-  try {
-    const resp = await fetch(`/orders/${orderId}/recalc/`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'X-CSRFToken': csrftoken
-      },
-      body: JSON.stringify({ edit_ops: editOps }) // передаём editOps
-    });
-
-    const data = await resp.json();
-
-    if (!data.ok) {
-      notify('Ошибка пересчёта', 'error');
-      setTimeout(() => { window.location.href = "/orders/"; }, 800);
-      return;
-    }
-
-    if (data.items && data.total !== undefined) {
-      redrawItems(data.items, data.total);
-
-      // 🔹 обновляем baseline на фронте после успешного пересчёта
-      baseline = {};
-      data.items.forEach(it => {
-        baseline[it.id] = it.quantity;
-      });
-    }
-
-    if (data.recalc) {
-      notify('🖨️ Чек с изменениями напечатан!');
-    } else {
-      notify('Изменений нет');
-    }
-
-    // сбрасываем флаг и editOps
-    hasChanges = false;
-    editOps = {};
-
-    setTimeout(() => {
-      window.location.href = "/orders/";
-    }, 900);
-  } catch (e) {
-    notify('Ошибка сети при пересчёте', 'error');
-    setTimeout(() => { window.location.href = "/orders/"; }, 900);
-  }
-}
-
 
     function redrawItems(items, total) {
       const list = document.getElementById('order-items');
@@ -422,7 +310,6 @@ async function recalc(orderId) {
         const row = document.createElement('div');
         row.className = 'item-row';
         row.setAttribute('data-item-id', it.id);
-
         row.innerHTML = `
           <div>${it.name} × ${it.quantity} — ${it.line_total} сом</div>
           <div style="display:flex; gap:8px;">
@@ -435,21 +322,162 @@ async function recalc(orderId) {
       document.getElementById('order-total').innerText = total + ' сом';
     }
 
-    async function markReady(orderId) {
-      const resp = await fetch(`/orders/${orderId}/ready/`, {
+    // ====== Позиции заказа ======
+    async function addItem(orderId, productId) {
+      flagChanged();
+
+      // Считаем КАЖДОЕ нажатие «+» по этому блюду. Раньше счётчик перезаписывался
+      // (= вместо +=) и искался в baseline по номеру блюда, хотя baseline
+      // хранится по номеру позиции заказа — поэтому при повторном добавлении
+      // на кухню уходило «1 шт» вместо реального количества.
+      // Что именно печатать (новое блюдо целиком или только прирост),
+      // сервер решает сам по данным из базы.
+      if (!editOps[productId]) {
+        editOps[productId] = { added: 0, removed: 0 };
+      }
+      editOps[productId].added += 1;
+
+      const resp = await fetch(`/orders/${orderId}/add-item/`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-CSRFToken': csrftoken },
+        body: JSON.stringify({ product_id: productId, qty: 1 })
+      });
+      const data = await resp.json();
+      if (!data.ok) { alert(data.error || 'Ошибка добавления'); return; }
+      redrawItems(data.items, data.total);
+    }
+
+    async function removeItem(itemId) {
+      flagChanged();
+      const resp = await fetch(`/order-items/${itemId}/remove/`, {
         method: 'POST',
         headers: { 'X-CSRFToken': csrftoken }
       });
       const data = await resp.json();
-      if (data.ok) window.location.href = "/orders/";
-      else alert("Ошибка при завершении заказа");
+      if (!data.ok) { alert(data.error || 'Ошибка удаления'); return; }
+      redrawItems(data.items, data.total);
     }
 
+    async function decreaseItemQuantity(itemId, currentQty) {
+      flagChanged();
+      const newQty = currentQty - 1;
+      const resp = await fetch(`/order-items/${itemId}/reduce/`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'X-CSRFToken': csrftoken },
+        body: `quantity=${newQty}`
+      });
+      const data = await resp.json();
+      if (!data.ok) { alert(data.error || 'Ошибка уменьшения'); return; }
+      redrawItems(data.items, data.total);
+    }
+
+    // ====== Дельты для печати изменений ======
+    function readCurrentItemsFromDOM() {
+      const list = document.getElementById('order-items');
+      const rows = list ? Array.from(list.querySelectorAll('.item-row')) : [];
+      const current = {};
+      rows.forEach(row => {
+        const id = row.dataset.itemId;
+        if (!id) return;
+        const txt = row.firstElementChild?.textContent || '';
+        const match = txt.match(/×\s*(\d+)/);
+        const qty = match ? parseInt(match[1], 10) : 0;
+        current[id] = qty;
+      });
+      return current;
+    }
+
+    function computeDiffs(current) {
+      const diffs = {};
+      const ids = new Set([...Object.keys(baseline), ...Object.keys(current)]);
+      ids.forEach(id => {
+        const base = baseline.hasOwnProperty(id) ? baseline[id] : 0;
+        const cur = current[id] || 0;
+        if (base !== cur) {
+          diffs[id] = { baseline_qty: base, current_qty: cur, delta: cur - base };
+        }
+      });
+      return diffs;
+    }
+
+    // ====== Назад (без сохранения, но с откатом черновых изменений) ======
+    async function goBack() {
+      const orderId = {{ order.id }};
+      const current = readCurrentItemsFromDOM();
+      const diffs = computeDiffs(current);
+      const hasDiffs = Object.keys(diffs).length > 0;
+
+      if (hasDiffs) {
+        try {
+          await fetch(`/orders/${orderId}/discard-draft/`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'X-CSRFToken': csrftoken },
+            body: JSON.stringify({ diffs })
+          });
+        } catch (e) {
+          console.warn("Ошибка при откате изменений", e);
+        }
+      }
+      window.location.href = "/orders/";
+    }
+
+    // ====== Пересчёт / печать изменений ======
+    async function recalc(orderId) {
+      try {
+        const resp = await fetch(`/orders/${orderId}/recalc/`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-CSRFToken': csrftoken },
+          body: JSON.stringify({ edit_ops: editOps })
+        });
+        const data = await resp.json();
+
+        if (!data.ok) {
+          notify('Ошибка пересчёта', 'error');
+          setTimeout(() => { window.location.href = "/orders/"; }, 800);
+          return;
+        }
+
+        if (data.items && data.total !== undefined) {
+          redrawItems(data.items, data.total);
+          baseline = {};
+          data.items.forEach(it => { baseline[it.id] = it.quantity; });
+        }
+
+        if (data.recalc) {
+          notify('🖨️ Чек с изменениями напечатан!');
+        } else {
+          notify('Изменений нет');
+        }
+
+        hasChanges = false;
+        editOps = {};
+
+        setTimeout(() => { window.location.href = "/orders/"; }, 900);
+      } catch (e) {
+        notify('Ошибка сети при пересчёте', 'error');
+        setTimeout(() => { window.location.href = "/orders/"; }, 900);
+      }
+    }
+
+    // ====== Завершение / отмена заказа ======
     async function cancelOrder(orderId) {
       const resp = await fetch(`/orders/${orderId}/cancel/`);
       const data = await resp.json();
       if (data.ok) window.location.href = "/orders/";
       else alert("Ошибка при отмене заказа");
+    }
+
+    async function markDelivery(orderId) {
+      const resp = await fetch(`/orders/${orderId}/delivery/`, {
+        method: 'POST',
+        headers: { 'X-CSRFToken': csrftoken }
+      });
+      const data = await resp.json();
+      if (data.ok) {
+        window.location.href = "/orders/";
+      } else {
+        alert("Ошибка при установке доставки");
+      }
     }
 
     function reprintReceipt(orderId) {
@@ -462,27 +490,86 @@ async function recalc(orderId) {
         .catch(() => notify("Ошибка сети при печати", "error"));
     }
 
-    function callOrder(orderId) {
-      fetch(`/orders/${orderId}/call/`)
-        .then(r => r.json())
-        .then(data => { if (data.ok) console.log("Вызов выполнен"); })
-        .catch(() => console.log("Ошибка сети при вызове заказа"));
+    // ====== Вызов заказа (озвучка) — с защитой от спам-кликов ======
+    let callInProgress = false;
+
+    async function callOrder(orderId) {
+      if (callInProgress) return; // игнорируем повторный клик, пока первый вызов не завершился
+      callInProgress = true;
+
+      const btn = document.getElementById('btn-call');
+      const originalText = btn.textContent;
+      btn.disabled = true;
+      btn.textContent = 'Вызов...';
+
+      try {
+        const resp = await fetch(`/orders/${orderId}/call/`);
+        const data = await resp.json();
+        if (data.ok) {
+          console.log("Вызов выполнен");
+        } else {
+          notify(data.error || 'Ошибка вызова', 'error');
+        }
+      } catch (e) {
+        console.log("Ошибка сети при вызове заказа");
+        notify('Ошибка сети при вызове', 'error');
+      } finally {
+        callInProgress = false;
+        btn.disabled = false;
+        btn.textContent = originalText;
+      }
     }
 
-    function notify(msg, type="success") {
-      const box = document.getElementById('notify');
-      if (!box) return;
-      box.textContent = msg;
-      box.className = "notify " + (type === "error" ? "error show" : "show");
-      setTimeout(() => {
-        box.className = "notify";
-      }, 2000);
-    }
+    let callEnInProgress = false;
 
+    async function callOrderEnglish(orderId) {
+      if (callEnInProgress) return;
+      callEnInProgress = true;
+
+      const btn = document.getElementById('btn-call-en');
+      const originalText = btn.textContent;
+      btn.disabled = true;
+      btn.textContent = 'Calling...';
+
+      try {
+        const resp = await fetch(`/orders/${orderId}/call-english/`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-CSRFToken': csrftoken
+          }
+        });
+        if (resp.ok) {
+          notify("🔊 English announcement triggered!");
+        } else {
+          notify("❌ Error triggering English announcement", "error");
+        }
+      } catch (err) {
+        console.error(err);
+        notify("⚠️ Network error", "error");
+      } finally {
+        callEnInProgress = false;
+        btn.disabled = false;
+        btn.textContent = originalText;
+      }
+    }
 
     // ====== Логика модалки оплаты ======
     let currentOrderId = null;
     let currentOrderTotal = 0;
+
+    async function applyManualDiscount(orderId) {
+      const percent = document.getElementById('md-percent').value || '0';
+      const pin = document.getElementById('md-pin').value;
+      const resp = await fetch(`/orders/${orderId}/discount/`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ percent, pin })
+      });
+      const data = await resp.json().catch(() => ({}));
+      if (!resp.ok || !data.ok) { alert(data.error || 'Не удалось применить скидку'); return; }
+      location.reload();
+    }
 
     function openPaymentModal(orderId, total) {
       currentOrderId = orderId;
@@ -524,276 +611,32 @@ async function recalc(orderId) {
       changeSpan.style.color = change >= 0 ? "green" : "red";
     }
 
+    let paymentInProgress = false;
+
     async function confirmPayment() {
-      if (!currentOrderId) return;
-      const resp = await fetch(`/orders/${currentOrderId}/ready/`, {
-        method: 'POST',
-        headers: { 'X-CSRFToken': csrftoken }
-      });
-      const data = await resp.json();
-      if (data.ok) {
-        closePaymentModal();
-        window.location.href = "/orders/";
-      } else {
-        alert("Ошибка при завершении заказа");
+      if (!currentOrderId || paymentInProgress) return;
+      paymentInProgress = true;
+
+      const btn = document.getElementById('btn-paid');
+      btn.disabled = true;
+
+      try {
+        const resp = await fetch(`/orders/${currentOrderId}/ready/`, {
+          method: 'POST',
+          headers: { 'X-CSRFToken': csrftoken }
+        });
+        const data = await resp.json();
+        if (data.ok) {
+          closePaymentModal();
+          window.location.href = "/orders/";
+        } else {
+          alert("Ошибка при завершении заказа");
+        }
+      } finally {
+        paymentInProgress = false;
+        btn.disabled = false;
       }
     }
-
-const baseline = window.baselineItems || {};
-let hasChanges = false;
-
-// Помощник: текущие позиции из DOM (или из последнего ответа API)
-function readCurrentItemsFromDOM() {
-  const list = document.getElementById('order-items');
-  const rows = list ? Array.from(list.querySelectorAll('.item-row')) : [];
-  const current = {};
-  rows.forEach(row => {
-    const id = row.dataset.itemId; // обязательно: <div class="item-row" data-item-id="123">
-    if (!id) return;
-    const txt = row.firstElementChild?.textContent || '';
-    const match = txt.match(/×\s*(\d+)/);
-    const qty = match ? parseInt(match[1], 10) : 0;
-    current[id] = qty;
-  });
-  return current;
-}
-
-// Дельты относительно baseline
-function computeDiffs(current) {
-  const diffs = {};
-  const ids = new Set([...Object.keys(baseline), ...Object.keys(current)]);
-  ids.forEach(id => {
-    // строго 0 для новых позиций
-    const base = baseline.hasOwnProperty(id) ? baseline[id] : 0;
-    const cur = current[id] || 0;
-    if (base !== cur) {
-      diffs[id] = { baseline_qty: base, current_qty: cur, delta: cur - base };
-    }
-  });
-  return diffs;
-}
-
-// Обновление флага изменений после любой операции
-function flagChanged() { hasChanges = true; }
-
-// Встраиваем флаг в существующие операции
-let editOps = {};
-
-async function addItem(orderId, productId) {
-  flagChanged();
-  if (!editOps[productId]) {
-    editOps[productId] = { added: 0, removed: 0 };
-  }
-  editOps[productId].added += 1; // фиксируем каждое добавление
-
-  const resp = await fetch(`/orders/${orderId}/add-item/`, {
-    method: 'POST',
-    headers: { 'Content-Type':'application/json', 'X-CSRFToken': csrftoken },
-    body: JSON.stringify({product_id: productId, qty: 1})
-  });
-  const data = await resp.json();
-  if (!data.ok) { alert(data.error || 'Ошибка добавления'); return; }
-  redrawItems(data.items, data.total);
-}
-
-
-async function removeItem(itemId) {
-  flagChanged();
-  const resp = await fetch(`/order-items/${itemId}/remove/`, {
-    method: 'POST',
-    headers: {'X-CSRFToken': csrftoken}
-  });
-  const data = await resp.json();
-  if (!data.ok) { alert(data.error || 'Ошибка удаления'); return; }
-  redrawItems(data.items, data.total);
-}
-
-async function decreaseItemQuantity(itemId, currentQty) {
-  flagChanged();
-  const newQty = currentQty - 1;
-  const resp = await fetch(`/order-items/${itemId}/reduce/`, {
-    method: 'POST',
-    headers: { 'Content-Type':'application/x-www-form-urlencoded', 'X-CSRFToken': csrftoken },
-    body: `quantity=${newQty}`
-  });
-  const data = await resp.json();
-  if (!data.ok) { alert(data.error || 'Ошибка уменьшения'); return; }
-  redrawItems(data.items, data.total);
-}
-
-// Исправленная кнопка "Назад"
-async function goBack() {
-  const orderId = {{ order.id }};
-
-  const current = readCurrentItemsFromDOM();
-  const diffs = computeDiffs(current);
-  const hasDiffs = Object.keys(diffs).length > 0;
-
-  if (hasDiffs) {
-    try {
-      await fetch(`/orders/${orderId}/discard-draft/`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-CSRFToken': csrftoken },
-        body: JSON.stringify({ diffs })
-      });
-    } catch (e) {
-      console.warn("Ошибка при откате изменений", e);
-    }
-  }
-  // В любом случае просто переход — цвет заказа не меняем на клиенте
-  window.location.href = "/orders/";
-}
-
-// Если после пересчёта ты считаешь изменения сохранёнными — сбрось флаг
-async function recalc(orderId) {
-  try {
-    const resp = await fetch(`/orders/${orderId}/recalc/`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'X-CSRFToken': csrftoken
-      },
-      body: JSON.stringify({ edit_ops: editOps }) // ✅ передаём editOps
-    });
-    const data = await resp.json();
-
-    if (!data.ok) {
-      notify('Ошибка пересчёта', 'error');
-      setTimeout(() => { window.location.href = "/orders/"; }, 800);
-      return;
-    }
-
-    if (data.items && data.total !== undefined) {
-      redrawItems(data.items, data.total);
-    }
-
-    if (data.recalc) {
-      notify('🖨️ Чек с изменениями напечатан!');
-    } else {
-      notify('Изменений нет');
-    }
-
-    // ✅ после успешного пересчёта сбрасываем флаг и editOps
-    hasChanges = false;
-    editOps = {};
-
-    setTimeout(() => {
-      window.location.href = "/orders/";
-    }, 900);
-  } catch (e) {
-    notify('Ошибка сети при пересчёте', 'error');
-    setTimeout(() => { window.location.href = "/orders/"; }, 900);
-  }
-}
-async function callOrderEnglish(orderId) {
-  try {
-    const resp = await fetch(`/orders/${orderId}/call-english/`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'X-CSRFToken': csrftoken
-      }
-    });
-    if (resp.ok) {
-      showNotify("🔊 English announcement triggered!");
-    } else {
-      showNotify("❌ Error triggering English announcement");
-    }
-  } catch (err) {
-    console.error(err);
-    showNotify("⚠️ Network error");
-  }
-}
-
-</script>
-<script>
-async function markDelivery(orderId) {
-  const resp = await fetch(`/orders/${orderId}/delivery/`, {
-    method: 'POST',
-    headers: { 'X-CSRFToken': csrftoken }
-  });
-  const data = await resp.json();
-  if (data.ok) {
-    window.location.href = "/orders/";
-  } else {
-    alert("Ошибка при установке доставки");
-  }
-}
-
-</script>
-<script>
-        function callOrderKyrgyz(orderId) {
-            fetch(`/orders/${orderId}/call_kyrgyz/`, {
-                method: "POST",
-                headers: {
-                    "X-CSRFToken": getCookie("csrftoken"),
-                    "Content-Type": "application/json"
-                }
-            });
-        }
-
-        function getCookie(name) {
-            let cookieValue = null;
-            if (document.cookie && document.cookie !== "") {
-                const cookies = document.cookie.split(";");
-                for (let i = 0; i < cookies.length; i++) {
-                    const cookie = cookies[i].trim();
-                    if (cookie.substring(0, name.length + 1) === (name + "=")) {
-                        cookieValue = decodeURIComponent(cookie.substring(name.length + 1));
-                        break;
-                    }
-                }
-            }
-            return cookieValue;
-        }
-    </script>
-
-<script>
-function callOrderKZ(orderId) {
-    const audio = document.getElementById("order-audio-kz");
-    audio.src = `/orders/${orderId}/call_kz/`;
-    audio.play();
-}
-</script>
+  </script>
 </body>
-
-<div id="payment-modal" class="modal" style="display:none;">
-  <div class="modal-content">
-    <h2>Оплата заказа</h2>
-    <p>Итого: <span id="payment-total">0</span> сом</p>
-
-    <input id="payment-display" type="text" readonly placeholder="Введите сумму" />
-    <p>Сдача: <span id="payment-change">0</span> сом</p>
-
-    <div class="keyboard">
-      <button onclick="pressPayKey('1')">1</button>
-      <button onclick="pressPayKey('2')">2</button>
-      <button onclick="pressPayKey('3')">3</button>
-      <button onclick="pressPayKey('4')">4</button>
-      <button onclick="pressPayKey('5')">5</button>
-      <button onclick="pressPayKey('6')">6</button>
-      <button onclick="pressPayKey('7')">7</button>
-      <button onclick="pressPayKey('8')">8</button>
-      <button onclick="pressPayKey('9')">9</button>
-      <button onclick="pressPayKey('0')">0</button>
-      <button onclick="clearPayInput()">C</button>
-      <button onclick="backspacePay()">←</button>
-    </div>
-
-    <div class="actions" style="margin-top:20px; display:flex; gap:16px;">
-      <button id="btn-paid" onclick="confirmPayment()">✅ Оплачено</button>
-      <button id="btn-cancel-payment" onclick="closePaymentModal()">❌ Отменить</button>
-    </div>
-  </div>
-</div>
-
-  </div>
-</div>
-
-
-
-
 </html>
-
-
-
