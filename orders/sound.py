@@ -24,6 +24,10 @@ MODELS_DIR = os.path.join(str(settings.BASE_DIR), "models")
 DISK_CACHE_DIR = os.path.join(str(settings.BASE_DIR), "tts_cache")
 os.makedirs(DISK_CACHE_DIR, exist_ok=True)
 
+# Полностью выключить голос (на слабой кассе он самый тяжёлый): переменная
+# окружения VOICE_OFF=1. Тогда озвучка не играет и нейросеть не трогается вовсе.
+VOICE_OFF = os.getenv("VOICE_OFF") == "1"
+
 NUM_WORDS = {
     0: "ноль", 1: "один", 2: "два", 3: "три", 4: "четыре",
     5: "пять", 6: "шесть", 7: "семь", 8: "восемь", 9: "девять",
@@ -164,14 +168,30 @@ def _get_or_synth(text: str, lang: str) -> np.ndarray:
     return audio
 
 
+def _get_cached(text: str):
+    """Только из кэша (память → диск). Нейросеть НЕ трогает — для горячего пути
+    (нажатие «Вызвать»), чтобы на слабой кассе вызов никогда не грузил torch."""
+    with _cache_lock:
+        audio = cache.get(text)
+    if audio is not None:
+        return audio
+    audio = _load_from_disk(text)
+    if audio is not None:
+        with _cache_lock:
+            cache[text] = audio
+    return audio
+
+
 def _player_worker():
     """Единственный поток, которому разрешено вызывать sd.play()/sd.wait()."""
     while True:
         text, lang = _play_queue.get()
-        # Если запрос прилетел раньше, чем модели прогрелись — ждём.
+        # Если запрос прилетел раньше, чем кэш прогрелся — ждём.
         _ready_event.wait()
         try:
-            audio = _get_or_synth(text, lang)
+            audio = _get_cached(text)          # только кэш — на вызове нейросеть не грузим
+            if audio is None:
+                continue                       # фразы нет в кэше — молча пропускаем, кассу не вешаем
             sd.play(audio, samplerate=24000)
             sd.wait()
         except Exception as e:
@@ -181,6 +201,8 @@ def _player_worker():
 
 
 def _enqueue(text: str, lang: str):
+    if VOICE_OFF:
+        return
     # Если кассир кликнул много раз подряд и очередь уже полна —
     # оставляем только самые свежие вызовы, старые не актуальны.
     if _play_queue.qsize() >= _MAX_QUEUE_SIZE:
@@ -206,6 +228,9 @@ def announce_en(num: int):
 
 
 def _warmup_and_preload():
+    if VOICE_OFF:          # голос выключен — ничего не греем и не синтезируем
+        _ready_event.set()
+        return
     try:
         # Прогрев аудио-драйвера — это не torch, нужно всегда и быстро.
         sd.play(np.zeros(2400), samplerate=24000)
